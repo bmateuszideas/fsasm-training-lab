@@ -1,0 +1,325 @@
+To trzeba złapać **teraz**, zanim kolejne elementy znowu się rozproszą. Poniżej masz pierwszy zapis roboczy tego, do czego doszliśmy — nie jako ostateczną specyfikację, tylko jako punkt odniesienia do dalszego odtwarzania historii.
+
+# FS-ASM — rekonstrukcja genezy i obecnego kierunku
+
+## 1. Skąd powstał FS-ASM
+
+FS-ASM nie powstał jako plan stworzenia rozbudowanego frameworka agentowego.
+
+Powstał jako praktyczna odpowiedź na problemy podczas rozwijania projektu **PUR Silnik Fizyczno-Chemiczny** przy użyciu dostępnych wtedy narzędzi AI.
+
+Głównym problemem był Coding Agent działający w VS Code, przede wszystkim GitHub Copilot, który miał ograniczony kontekst i podczas dłuższej pracy:
+
+* zapominał wcześniejsze decyzje architektoniczne,
+* nie pamiętał istniejących modułów i pipeline’ów,
+* tworzył równoległe rozwiązania dla funkcji, które już istniały,
+* dodawał niepotrzebne pliki,
+* zmieniał kierunek implementacji w połowie pracy,
+* powtarzał wcześniejsze, nieskuteczne próby,
+* tracił informację o stanie projektu po zmianie sesji,
+* wykonywał lokalnie sensowne zmiany, które globalnie naruszały architekturę.
+
+FS-ASM był próbą nadania agentowi zewnętrznej, trwałej pamięci oraz jednoznacznego protokołu działania.
+
+## 2. Pierwotna architektura systemu
+
+Historyczny FS-ASM nie składał się wyłącznie z jednego Coding Agenta.
+
+Był to workflow obejmujący co najmniej dwa różne środowiska agentowe oraz człowieka pełniącego funkcję orkiestratora.
+
+### Planning Agent
+
+Planning Agent działał w webowej wersji ChatGPT, najczęściej wewnątrz projektu zawierającego dokumentację użytkownika.
+
+Otrzymywał:
+
+* luźne notatki,
+* dokumenty techniczne,
+* przemyślenia dotyczące programu,
+* wymagania funkcjonalne,
+* ograniczenia,
+* informacje domenowe,
+* decyzje podejmowane podczas rozmowy.
+
+Jego zadaniem było przekształcenie tych materiałów w uporządkowany pakiet wykonawczy dla środowiska VS Code.
+
+Planning Agent generował między innymi:
+
+* opis projektu,
+* architekturę,
+* standardy,
+* instrukcje pracy dla Coding Agenta,
+* listy zadań,
+* kryteria weryfikacji,
+* pliki pamięci,
+* plik startowy wskazujący kolejność odczytywania dokumentacji.
+
+Planning Agent działał więc jak warstwa analizy, formalizacji i kompilacji projektu.
+
+### Ręczny handoff
+
+Wygenerowane przez Planning Agenta pliki były ręcznie kopiowane do repozytorium otwartego w VS Code.
+
+Człowiek pełnił funkcję:
+
+* message busa pomiędzy agentami,
+* orkiestratora,
+* bramki zatwierdzającej,
+* obserwatora jakości,
+* źródła korekt i eskalacji.
+
+Ręczne przekazywanie plików nie było przypadkowym ograniczeniem. Stanowiło część rzeczywistego workflow wynikającą z dostępnych wtedy narzędzi i braku płatnych API.
+
+### Coding Agent
+
+Coding Agent działał w VS Code i miał dostęp do:
+
+* kodu źródłowego,
+* terminala,
+* testów,
+* struktury repozytorium,
+* plików wygenerowanych przez Planning Agenta.
+
+Użytkownik wskazywał mu jeden plik startowy. Plik ten określał, jakie dokumenty agent ma przeczytać, w jakiej kolejności oraz jak ma odnaleźć aktualne zadanie.
+
+Coding Agent miał:
+
+* odtworzyć stan projektu,
+* przeczytać architekturę i standardy,
+* znaleźć pierwsze niewykonane zadanie,
+* wykonać ograniczony zakres zmian,
+* przeprowadzić testy,
+* zapisać changelog,
+* oznaczyć zadanie jako wykonane albo zablokowane,
+* pozostawić stan umożliwiający kontynuację przez następną sesję.
+
+## 3. Pełny historyczny przepływ
+
+```text
+Dokumenty, pomysły i wiedza użytkownika
+                ↓
+Planning Agent w ChatGPT
+                ↓
+Analiza i formalizacja projektu
+                ↓
+Bootstrap Pack dla repozytorium
+                ↓
+Ręczne zatwierdzenie i kopiowanie
+                ↓
+Coding Agent w VS Code
+                ↓
+Implementacja, testy i logi
+                ↓
+Aktualizacja trwałego stanu projektu
+                ↓
+Informacja zwrotna użytkownika
+                ↺
+Planning Agent
+```
+
+FS-ASM był więc plikowym protokołem komunikacji i utrzymywania stanu pomiędzy Planning Agentem, Coding Agentem i człowiekiem.
+
+## 4. Rola repozytoriów PUR
+
+Repozytorium **PUR-Silnik-fiz-chem** przedstawia wcześniejszy, roboczy etap projektu oraz ślady walki z ograniczeniami Coding Agenta.
+
+Repozytorium **PUR-SILNIK-FIZ-CHEM-v.2** jest późniejszym snapshotem tego samego projektu rozwijanego lokalnie za pomocą tego workflow.
+
+Nie są to dwa niezależne projekty.
+
+Chronologia wygląda w przybliżeniu tak:
+
+```text
+pierwszy stan repozytorium
+        ↓
+rozwój lokalny z użyciem FS-ASM
+        ↓
+kolejne TODO, testy, changelogi i poprawki
+        ↓
+późniejszy snapshot zapisany jako v2
+```
+
+Repozytoria dokumentują głównie Execution Plane, czyli część obsługiwaną przez Coding Agenta.
+
+Planning Agent działał poza repozytorium, w projektach i rozmowach ChatGPT. Z tego powodu jego historia jest słabiej widoczna i musi zostać odtworzona z zachowanych plików użytkownika.
+
+## 5. Co FS-ASM robił w praktyce
+
+System wprowadził między innymi:
+
+* jeden plik startowy dla Coding Agenta,
+* określoną kolejność ładowania dokumentów,
+* architekturę jako źródło prawdy,
+* standardy jako zbiór ograniczeń,
+* listę TODO jako licznik programu,
+* atomowe zadania,
+* kryteria weryfikacji,
+* ograniczanie zakresu modyfikowanych plików,
+* obowiązkowe testy,
+* statusy DONE i BLOCKED,
+* changelogi dla wykonanych zadań,
+* logowanie nieudanych prób,
+* trwałą pamięć projektu niezależną od sesji czatu,
+* możliwość kontynuowania pracy przez inny model lub nową sesję.
+
+Pierwszy niezaznaczony punkt TODO pełnił funkcję wskaźnika aktualnej instrukcji.
+
+Pliki instrukcji określały protokół wykonania.
+
+Testy określały warunek zakończenia.
+
+Changelogi i logi błędów tworzyły historię wykonania.
+
+## 6. Jak powstawały kolejne zasady
+
+Wiele elementów późniejszego FS-ASM było reakcją na konkretne awarie Coding Agenta.
+
+```text
+Agent zapomniał istniejący pipeline
+→ architektura jako źródło prawdy
+
+Agent stworzył równoległy moduł
+→ ograniczenie zakresu zmian i lista dozwolonych plików
+
+Agent nie pamiętał bieżącego celu
+→ task register i program counter
+
+Agent powtarzał błędną próbę
+→ failure log i changelog
+
+Agent ogłaszał sukces bez dowodu
+→ verification gate i obowiązkowe testy
+
+Nowa sesja nie znała stanu projektu
+→ bootstrap protocol
+
+Agent improwizował przy brakujących danych
+→ jawne DATA-GAP i ASSUMPTION
+
+Projekt tracił spójność między dokumentacją a kodem
+→ rozdzielenie Planning Agent i Coding Agent
+```
+
+FS-ASM wyrastał więc z obserwowanych failure modes, a nie wyłącznie z teoretycznego projektowania.
+
+## 7. Ewolucja do v6
+
+Wersja v6 rozszerzyła pierwotny workflow w bardziej formalną metodologię.
+
+Planning Agent został przedstawiony jako rodzaj kompilatora, który przekształca nieuporządkowaną dokumentację w pakiet wykonawczy.
+
+Pojawiły się między innymi:
+
+* Input Documentation Quality Gate,
+* raportowanie braków danych,
+* jawne założenia,
+* typowane zadania,
+* zadania PHYSICS-CRITICAL,
+* metryki i progi walidacji,
+* kontrolowane retry,
+* kryteria konwergencji,
+* fingerprinting danych i modeli,
+* rozdzielenie Control Plane, State Plane i Execution Plane,
+* autoweryfikacja bootstrapu.
+
+V6 nie była więc całkowicie nowym systemem. Była próbą uogólnienia doświadczeń z rzeczywistego projektu PUR.
+
+## 8. Najważniejszy obecny wniosek
+
+FS-ASM nie powinien być obecnie definiowany wyłącznie jako pamięć dla Coding Agenta.
+
+Trafniejsze określenie brzmi:
+
+> FS-ASM jest plikowym i audytowalnym protokołem przekształcania nieuporządkowanej wiedzy użytkownika w formalny pakiet wykonawczy, przekazywany pomiędzy Planning Agentem i Coding Agentem, z człowiekiem pełniącym funkcję orkiestratora i bramki zatwierdzającej.
+
+Jego pierwotnym celem było ograniczenie problemów wynikających z małego kontekstu modelu.
+
+Jego szerszą funkcją stało się:
+
+* zachowanie spójności architektury,
+* materializowanie stanu projektu,
+* rozdzielenie projektowania od implementacji,
+* kontrolowanie zakresu działań agenta,
+* utrzymanie historii decyzji i błędów,
+* umożliwienie pracy wielu modeli nad jednym projektem.
+
+## 9. Obecny cel projektu
+
+Celem nie jest obecnie budowanie dużej platformy SaaS ani pełnego autonomicznego systemu.
+
+FS-ASM może zostać wykorzystany jako osobiste laboratorium do nauki i testowania:
+
+* agentów AI,
+* workflowów wieloagentowych,
+* pamięci trwałej,
+* handoffu pomiędzy agentami,
+* selekcji kontekstu,
+* walidacji wyjść modeli,
+* orkiestracji,
+* checkpointów,
+* recovery,
+* kontroli narzędzi,
+* ewaluacji pracy agentów.
+
+Rozwój powinien następować stopniowo, z zachowaniem pierwotnego, ręcznego workflow jako punktu odniesienia.
+
+## 10. Proponowany następny etap
+
+Przed rozpoczęciem implementacji należy zabezpieczyć historię projektu.
+
+Warto utworzyć jedno repozytorium robocze, na przykład:
+
+```text
+fsasm-lab/
+├── history/
+│   ├── PUR-repo-v1/
+│   ├── PUR-repo-v2/
+│   ├── fsasm-v4/
+│   ├── fsasm-v6/
+│   └── planning-agent-artifacts/
+├── docs/
+│   ├── ORIGIN.md
+│   ├── SYSTEM_OVERVIEW.md
+│   ├── TIMELINE.md
+│   ├── FAILURE_MODES.md
+│   └── OPEN_QUESTIONS.md
+├── experiments/
+└── fsasm-core/
+```
+
+Najpierw należy gromadzić i klasyfikować istniejące materiały.
+
+Dopiero później warto zaimplementować pierwszy niewielki komponent, prawdopodobnie parser i validator artefaktów Planning Agenta.
+
+## 11. Materiały, których należy jeszcze poszukać
+
+Do pełniejszego odtworzenia historii potrzebne mogą być:
+
+* pierwotne instrukcje Planning Agenta,
+* eksporty projektów ChatGPT,
+* wcześniejsze warianty bootstrapu,
+* starsze wersje TODO,
+* pliki generowane przed skopiowaniem do VS Code,
+* lokalne repozytoria z katalogiem `.git`,
+* notatki dotyczące problemów z Copilotem,
+* wcześniejsze wersje FS-ASM,
+* rozmowy z innymi modelami,
+* pliki zawierające poprawki i krytykę kolejnych wersji,
+* daty modyfikacji lokalnych artefaktów.
+
+Brak tych plików nie uniemożliwia dalszej pracy. Każdy odnaleziony artefakt można później dopisać do chronologii i porównać z istniejącymi wersjami.
+
+## 12. Status
+
+Na obecnym etapie wiadomo, że:
+
+* FS-ASM miał co najmniej dwa główne agenty,
+* Planning Agent działał w webowym ChatGPT,
+* Coding Agent działał w VS Code,
+* człowiek był orkiestratorem i approval gate’em,
+* repozytoria PUR pokazują kolejne stany rzeczywistego wykonania,
+* v6 jest późniejszym uogólnieniem doświadczeń,
+* system powstał w odpowiedzi na konkretne awarie modeli,
+* dalszy rozwój powinien zacząć się od archiwizacji i rekonstrukcji, a nie od pisania kolejnej wielkiej [https://github.com/bmateuszideas/PUR-SILNIK-FIZ-CHEM-v.2.git](https://github.com/bmateuszideas/PUR-SILNIK-FIZ-CHEM-v.2.git).
+
+Ten dokument potraktowałbym jako `ORIGIN_AND_CURRENT_UNDERSTANDING.md`. Kiedy przypomnisz sobie kolejne etapy albo znajdziesz pliki Planning Agenta, będziemy dopisywać je do tej jednej osi zamiast za każdym razem odtwarzać historię od początku.
