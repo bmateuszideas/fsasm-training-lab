@@ -63,7 +63,6 @@ FS-ASM ma być możliwie **model-agnostic** i **framework-agnostic**. Mistral AP
 fsasm-training-lab/
 ├── README.md
 ├── fsasm-first/
-├── dokumentacja fsasm z clouda/
 └── stare dokumenty rozwojowe fsasm/
 ```
 
@@ -77,15 +76,11 @@ To **nie jest całe FS-ASM** i nie należy traktować jego aktualnej struktury j
 
 ### `stare dokumenty rozwojowe fsasm/`
 
-Historyczne wersje metodologii, specyfikacje, addenda, analizy porównawcze i materiały pokazujące ewolucję koncepcji FS-ASM.
+Zdeduplikowany zbiór historycznych wersji metodologii, specyfikacji, addendów, analiz porównawczych i materiałów pokazujących ewolucję koncepcji FS-ASM.
 
-Są ważnym materiałem badawczym i źródłem historii projektu, ale **nie są aktualnymi instrukcjami implementacyjnymi**.
+Materiały wcześniej przechowywane osobno w katalogu `dokumentacja fsasm z clouda/` zostały porównane po blob SHA. Identyczne kopie usunięto, a jedyny unikalny artefakt przeniesiono do tego katalogu. Ten folder jest więc obecnie kanonicznym archiwum historycznym w repozytorium.
 
-### `dokumentacja fsasm z clouda/`
-
-Materiały przeniesione z wcześniejszego środowiska chmurowego. Część zawartości pokrywa się ze zbiorem dokumentów historycznych.
-
-Ten katalog również należy traktować jako **źródło historyczne / archiwalne**, a nie source of truth dla bieżącej implementacji.
+Dokumenty historyczne są ważnym materiałem badawczym i źródłem historii projektu, ale **nie są aktualnymi instrukcjami implementacyjnymi**.
 
 ## Aktualny status
 
