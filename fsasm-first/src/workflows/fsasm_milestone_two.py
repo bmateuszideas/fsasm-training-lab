@@ -25,8 +25,8 @@ with workflow.unsafe.imports_passed_through():
     from fsasm.planner_activities import plan_activity
     from fsasm.verifier import DeterministicVerifier
     from fsasm.persistence import RuntimePersistence
-    from fsasm.transitions import transition_run
     from fsasm.errors import ConfigurationError
+    from fsasm.transitions import transition_run
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ class WorkflowInput(BaseModel):
     goal: str
     run_id: str | None = None
     planner_backend: PlannerBackend = Field(
-        default=PlannerBackend.STUB,
-        description="Backend to use for planning: 'stub' (default) or 'mistral'.",
+        ...,
+        description="Backend to use for planning: 'stub' or 'mistral' - MUST be explicitly provided.",
     )
     model_name: str | None = Field(
         default=None,
@@ -161,7 +161,10 @@ async def persist_plan_and_state_activity(
     This is an activity because it performs filesystem I/O.
     Uses atomic writes for mutable state.
     Saves PlannerProposal as small structured evidence artifact.
+    Transitions CREATED -> PLANNED here to avoid datetime.utcnow() in workflow body.
     """
+    from fsasm.transitions import transition_run
+
     persistence = RuntimePersistence()
 
     plan = planner_output.plan
@@ -178,6 +181,9 @@ async def persist_plan_and_state_activity(
         completed_task_ids=[],
         failed_task_ids=[],
     )
+
+    # Transition CREATED -> PLANNED in activity (not workflow body)
+    transition_run(state, RunStatus.PLANNED)
 
     # Save plan
     persistence.save_plan(plan)
@@ -309,9 +315,6 @@ async def persist_final_state_activity(
     """
     persistence = RuntimePersistence()
 
-    # Transition to RUNNING first
-    transition_run(state, RunStatus.RUNNING)
-
     # Create final verification evidence BEFORE transitioning to final state
     # This ensures evidence documents the actual verification result
     verification_evidence = EvidenceRecord(
@@ -332,6 +335,9 @@ async def persist_final_state_activity(
     )
     persistence.save_evidence(verification_evidence)
     evidence_records.append(verification_evidence)
+
+    # Transition to RUNNING first (in activity, not workflow body)
+    transition_run(state, RunStatus.RUNNING)
 
     # Now transition to final state based on verification
     if verification_result.status == VerificationResultStatus.PASS:
@@ -424,11 +430,8 @@ class FsasmMilestoneTwoWorkflow:
         # Step 4: Validate plan
         await validate_plan_activity(planner_output.plan)
 
-        # Step 5: Persist plan/state/proposal activity
+        # Step 5: Persist plan/state/proposal activity (includes CREATED->PLANNED transition)
         plan, state = await persist_plan_and_state_activity(planner_output, goal_input)
-
-        # Transition from CREATED to PLANNED via explicit transition function
-        transition_run(state, RunStatus.PLANNED)
 
         # Step 6: Persist evidence activity (pre-verification evidence)
         evidence_records = await persist_evidence_activity(state.run_id, plan)

@@ -43,9 +43,15 @@ def workflow_module():
 class TestWorkflowInput:
     """Tests for WorkflowInput model."""
 
-    def test_default_backend_is_stub(self):
-        """Test that default backend is STUB."""
-        input_data = WorkflowInput(goal="Test goal")
+    def test_backend_must_be_explicit(self):
+        """Test that backend must be explicitly provided (no default)."""
+        with pytest.raises(Exception) as exc_info:
+            WorkflowInput(goal="Test goal")
+        assert "required" in str(exc_info.value).lower() or "planner_backend" in str(exc_info.value).lower()
+
+    def test_backend_can_be_stub(self):
+        """Test that backend can be explicitly set to STUB."""
+        input_data = WorkflowInput(goal="Test goal", planner_backend=PlannerBackend.STUB)
         assert input_data.planner_backend == PlannerBackend.STUB
 
     def test_custom_run_id(self):
@@ -53,6 +59,7 @@ class TestWorkflowInput:
         input_data = WorkflowInput(
             goal="Test goal",
             run_id="my-custom-run-id",
+            planner_backend=PlannerBackend.STUB,
         )
         assert input_data.run_id == "my-custom-run-id"
 
@@ -287,3 +294,84 @@ class TestFsasmMilestoneTwoWorkflow:
         assert result["planner_provider"] == "mistral"
         assert result["planner_model"] == "mistral-large-latest"
         assert result["planner_model_call_count"] == 1
+
+    # =========================================================================
+    # WORKFLOW-LEVEL TESTS (using Mistral Workflows testing utilities)
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_workflow_level_execution_with_test_worker(
+        self, temporal_env, workflow_module
+    ):
+        """
+        Real workflow-level test for M2 using Mistral Workflows testing utilities.
+        
+        Uses create_test_worker to start a real worker and execute the workflow
+        through the Mistral Workflows API with STUB backend (no API calls).
+        """
+        from src.workflows.fsasm_milestone_two import (
+            FsasmMilestoneTwoWorkflow,
+            create_input_activity,
+            validate_config_activity,
+            plan_activity,
+            validate_plan_activity,
+            persist_plan_and_state_activity,
+            persist_evidence_activity,
+            verify_run_activity,
+            persist_final_state_activity,
+        )
+        from mistralai.workflows.testing import create_test_worker
+        
+        WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=10)
+        
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneTwoWorkflow],
+            activities=[
+                create_input_activity,
+                validate_config_activity,
+                plan_activity,
+                validate_plan_activity,
+                persist_plan_and_state_activity,
+                persist_evidence_activity,
+                verify_run_activity,
+                persist_final_state_activity,
+            ],
+        ):
+            # Execute workflow through the client API with STUB backend
+            handle = await temporal_env.client.start_workflow(
+                "fsasm-milestone-two",
+                {
+                    "goal": "Test workflow level execution M2",
+                    "planner_backend": "stub",
+                },
+                id="test-fsasm-m2-workflow-level",
+                task_queue="test-task-queue",
+                execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
+            )
+            
+            # Wait for result with client-side timeout as fallback
+            result = await asyncio.wait_for(
+                handle.result(),
+                timeout=15
+            )
+            
+            # Verify structured result
+            assert isinstance(result, dict)
+            assert "run_id" in result
+            assert "goal" in result
+            assert result["goal"] == "Test workflow level execution M2"
+            assert "status" in result
+            assert result["status"] == "PASSED"
+            assert "success" in result
+            assert result["success"] is True
+            assert "plan_id" in result
+            assert "task_count" in result
+            assert result["task_count"] == 3
+            assert "task_ids" in result
+            assert len(result["task_ids"]) == 3
+            assert "evidence_count" in result
+            assert result["evidence_count"] > 0
+            assert "planner_provider" in result
+            assert result["planner_provider"] == "stub"
+            assert result["planner_model_call_count"] == 0

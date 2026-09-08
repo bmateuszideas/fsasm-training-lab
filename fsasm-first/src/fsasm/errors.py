@@ -93,9 +93,9 @@ class PersistenceError(FSASMError):
 class ConfigurationError(FSASMError):
     """Raised when there is a configuration error (e.g., missing required config for backend)."""
 
-    def __init__(self, message: str, backend: str | None = None, missing_field: str | None = None) -> None:
+    def __init__(
+        self, message: str, backend: str | None = None, missing_field: str | None = None
+    ) -> None:
         self.backend = backend
         self.missing_field = missing_field
-        super().__init__(
-            message, {"backend": backend, "missing_field": missing_field}
-        )
+        super().__init__(message, {"backend": backend, "missing_field": missing_field})

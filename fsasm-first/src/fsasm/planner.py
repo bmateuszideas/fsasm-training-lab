@@ -17,17 +17,17 @@ from fsasm.models import (
 def assemble_plan(goal_input: GoalInput, proposal: PlannerProposal) -> Plan:
     """
     Assemble a runtime-owned Plan from a semantic PlannerProposal.
-    
+
     This is the SINGLE deterministic assembler used by both Stub and Mistral backends.
     It assigns all runtime-owned fields: run_id, plan_id, task_id, sequence, status, attempt, max_attempts.
-    
+
     Dependencies in TaskProposal use proposal-local sequence numbers which are
     mapped deterministically to runtime task IDs (TASK-001, TASK-002, TASK-003).
-    
+
     Args:
         goal_input: The GoalInput containing the authoritative goal and run_id.
         proposal: The PlannerProposal with semantic task content.
-    
+
     Returns:
         A fully assembled Plan with all runtime-owned fields set.
     """
@@ -44,9 +44,16 @@ def assemble_plan(goal_input: GoalInput, proposal: PlannerProposal) -> Plan:
         task_id_map[idx] = task_id
 
         # Map proposal-local dependency sequence numbers to runtime task IDs
-        runtime_dependencies = [
-            task_id_map[dep_seq] for dep_seq in task_proposal.dependencies
-        ]
+        # Validate that dependencies are valid: 1 <= dep_seq < current_task_sequence
+        runtime_dependencies = []
+        for dep_seq in task_proposal.dependencies:
+            if not (1 <= dep_seq < idx):
+                raise ValueError(
+                    f"Task {idx} has invalid dependency sequence {dep_seq}. "
+                    f"Dependencies must satisfy: 1 <= dep_seq < current_task_sequence ({idx}). "
+                    f"This prevents: 0, self-dependency, future dependencies, and cycles."
+                )
+            runtime_dependencies.append(task_id_map[dep_seq])
 
         task = ChildTask(
             task_id=task_id,
@@ -59,7 +66,7 @@ def assemble_plan(goal_input: GoalInput, proposal: PlannerProposal) -> Plan:
             constraints=task_proposal.constraints,
             allowed_files=task_proposal.allowed_files,
             verification=VerificationSpec(
-                type=task_proposal.verification_type,
+                type=VerificationType(task_proposal.verification_type),
                 expected=task_proposal.verification_expected,
             ),
             expected_evidence=task_proposal.expected_evidence,
@@ -96,10 +103,10 @@ class PlannerStub:
     def create_proposal(self, input: GoalInput) -> PlannerProposal:
         """
         Create a PlannerProposal with exactly 3 TaskProposal instances.
-        
+
         Args:
             input: The GoalInput containing the goal.
-        
+
         Returns:
             A PlannerProposal with exactly 3 TaskProposal.
         """
@@ -141,7 +148,7 @@ class PlannerStub:
     def create_plan(self, input: GoalInput) -> Plan:
         """
         Create a plan with exactly 3 ChildTasks from a GoalInput.
-        
+
         This method is kept for backward compatibility with Milestone 1.
         It creates a proposal and assembles it using the shared assembler.
 
@@ -157,18 +164,16 @@ class PlannerStub:
     async def plan(self, input: GoalInput) -> PlannerOutput:
         """
         Async planning interface for Milestone 2 compatibility.
-        
+
         Creates a proposal and assembles the plan using the shared assembler.
         Returns PlannerOutput with metadata for stub backend.
-        
+
         Args:
             input: The GoalInput containing the goal and optional run_id.
-        
+
         Returns:
             PlannerOutput with proposal, assembled plan, and stub metadata.
         """
-        from fsasm.models import PlannerMetadata
-
         proposal = self.create_proposal(input)
         plan = assemble_plan(input, proposal)
 

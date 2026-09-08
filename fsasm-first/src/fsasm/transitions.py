@@ -14,7 +14,10 @@ _TASK_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.READY: {TaskStatus.RUNNING, TaskStatus.BLOCKED},
     TaskStatus.RUNNING: {TaskStatus.PASSED, TaskStatus.FAILED, TaskStatus.BLOCKED},
     TaskStatus.PASSED: set(),  # Terminal state - no outgoing transitions
-    TaskStatus.FAILED: {TaskStatus.READY, TaskStatus.NEEDS_HUMAN},  # Can retry if budget remains, or escalate
+    TaskStatus.FAILED: {
+        TaskStatus.READY,
+        TaskStatus.NEEDS_HUMAN,
+    },  # Can retry if budget remains, or escalate
     TaskStatus.BLOCKED: {TaskStatus.READY},  # Can become ready when unblocked
     TaskStatus.NEEDS_HUMAN: set(),  # Terminal state - requires human intervention
 }
@@ -139,7 +142,10 @@ def transition_task(
                     current_attempt=task.attempt,
                 )
             # Increment attempt counter when retrying
-            if target_status == TaskStatus.READY and current_status == TaskStatus.FAILED:
+            if (
+                target_status == TaskStatus.READY
+                and current_status == TaskStatus.FAILED
+            ):
                 task.attempt += 1
 
     # Perform the transition

@@ -6,8 +6,8 @@ installdeps:
 
 ## Check workflow code with ruff (lint + format check)
 lint:
-	uv run ruff check src/workflows/
-	uv run ruff format --check src/workflows/
+	uv run ruff check src/workflows/ src/fsasm/
+	uv run ruff format --check src/workflows/ src/fsasm/
 
 ## Auto-format workflow code and apply ruff autofixes
 format:
@@ -16,14 +16,21 @@ format:
 
 ## Type-check workflow code with mypy
 typecheck:
-	uv run mypy src/workflows/
+	uv run mypy src/workflows/ src/fsasm/
 
 ## Lint workflows for determinism / I/O / structure issues (semgrep, advisory)
 lint-workflows:
-	uv run semgrep --config .agents/skills/workflows/scripts/linting/rules/ --quiet src/workflows/
+	uv run semgrep --config .agents/skills/workflows/scripts/linting/rules/ --quiet src/workflows/ src/fsasm/
 
 ## Run all checks: ruff lint, mypy types, and workflow lint
 check: lint typecheck lint-workflows
+
+## Run tests
+test:
+	uv run pytest
+
+test:
+	uv run pytest
 
 ## Auto-discover all workflows and start the worker (with file-watch auto-reload)
 start-worker:

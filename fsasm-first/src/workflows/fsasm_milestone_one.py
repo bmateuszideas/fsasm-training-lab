@@ -119,11 +119,13 @@ async def persist_plan_and_state_activity(
 
     This is an activity because it performs filesystem I/O.
     Uses atomic writes for mutable state.
+    Transitions CREATED -> PLANNED here to avoid datetime.utcnow() in workflow body.
     """
+    from fsasm.transitions import transition_run
+
     persistence = RuntimePersistence()
 
     # Create initial run state with CREATED status
-    # Transition to PLANNED will happen via transition_run() in the workflow
     run_id = plan.run_id
     state = RunState(
         run_id=run_id,
@@ -134,6 +136,9 @@ async def persist_plan_and_state_activity(
         completed_task_ids=[],
         failed_task_ids=[],
     )
+
+    # Transition CREATED -> PLANNED in activity (not workflow body)
+    transition_run(state, RunStatus.PLANNED)
 
     # Save plan
     persistence.save_plan(plan)
@@ -148,8 +153,8 @@ async def persist_plan_and_state_activity(
             "event": "run_created",
             "run_id": run_id,
             "goal": goal_input.goal,
-            "status": RunStatus.CREATED.value,
-            "timestamp": state.created_at,
+            "status": RunStatus.PLANNED.value,
+            "timestamp": state.updated_at,
         },
     )
 
@@ -248,7 +253,7 @@ async def persist_final_state_activity(
     """
     persistence = RuntimePersistence()
 
-    # Transition to RUNNING first
+    # Transition to RUNNING first (in activity, not workflow body)
     transition_run(state, RunStatus.RUNNING)
 
     # Create final verification evidence BEFORE transitioning to final state
@@ -357,8 +362,8 @@ class FsasmMilestoneOneWorkflow:
         # Step 4: Persist plan/state activity
         plan, state = await persist_plan_and_state_activity(validated_plan, goal_input)
 
-        # Transition from CREATED to PLANNED via explicit transition function
-        transition_run(state, RunStatus.PLANNED)
+        # Note: CREATED->PLANNED transition moved to persist_plan_and_state_activity to avoid
+        # calling state.touch() (which uses datetime.utcnow()) in deterministic workflow body
 
         # Step 5: Persist evidence activity (pre-verification evidence)
         evidence_records = await persist_evidence_activity(state.run_id, plan)

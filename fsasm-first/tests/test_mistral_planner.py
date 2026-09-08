@@ -82,8 +82,8 @@ class TestPlanWithMistralActivity:
                 ),
             ],
             usage=UsageInfo(
-                input_tokens=100,
-                output_tokens=50,
+                prompt_tokens=100,
+                completion_tokens=50,
                 total_tokens=150,
             ),
         )
@@ -138,6 +138,8 @@ class TestPlanWithMistralActivity:
         assert metadata.prompt_version == "v1.0"
         assert metadata.model_call_count == 1  # Exactly one model call
         assert metadata.planner_invocation_count == 1
+        # Note: Mistral UsageInfo uses prompt_tokens and completion_tokens, not input_tokens/output_tokens
+        # Our code maps these correctly
         assert metadata.input_tokens == 100
         assert metadata.output_tokens == 50
         assert metadata.total_tokens == 150

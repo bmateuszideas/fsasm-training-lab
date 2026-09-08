@@ -68,7 +68,7 @@ class VerificationType(str, Enum):
 class TaskProposal(BaseModel):
     """
     Semantic task proposal from LLM - contains only content, no runtime-owned fields.
-    
+
     Dependencies use proposal-local references (sequence numbers) that the assembler
     maps deterministically to runtime task IDs.
     """
@@ -99,7 +99,9 @@ class TaskProposal(BaseModel):
         default_factory=list, description="List of expected evidence types/paths."
     )
 
-    @field_validator("title", "description", "verification_type", "verification_expected")
+    @field_validator(
+        "title", "description", "verification_type", "verification_expected"
+    )
     @classmethod
     def text_not_empty(cls, v: str) -> str:
         if not v.strip():
@@ -110,7 +112,7 @@ class TaskProposal(BaseModel):
 class PlannerProposal(BaseModel):
     """
     Semantic plan proposal from LLM - contains only content, no runtime-owned fields.
-    
+
     The authoritative Plan.goal always comes from GoalInput.goal.
     Task IDs are assigned by the deterministic assembler, not by the LLM.
     """
@@ -123,7 +125,9 @@ class PlannerProposal(BaseModel):
     @classmethod
     def validate_task_count(cls, v: list[TaskProposal]) -> list[TaskProposal]:
         if len(v) != 3:
-            raise ValueError("Proposal must contain exactly 3 TaskProposal for milestone 1")
+            raise ValueError(
+                "Proposal must contain exactly 3 TaskProposal for milestone 1"
+            )
         return v
 
 
@@ -138,14 +142,18 @@ class PlannerConfig(BaseModel):
     )
     model_version: str | None = Field(default=None, description="Model version.")
     prompt_version: str = Field(default="v1.0", description="Prompt template version.")
-    max_tokens: int = Field(default=4096, ge=1, description="Maximum tokens for LLM response.")
-    temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="Sampling temperature.")
+    max_tokens: int = Field(
+        default=4096, ge=1, description="Maximum tokens for LLM response."
+    )
+    temperature: float = Field(
+        default=0.0, ge=0.0, le=2.0, description="Sampling temperature."
+    )
 
 
 class PlannerMetadata(BaseModel):
     """
     Planner metadata for observability - explicitly tied to run_id.
-    
+
     Contains all required observability fields:
     - provider, requested/resolved model, prompt_version, prompt hash
     - model_call_count (0 for stub, 1 for mistral)
@@ -174,10 +182,14 @@ class PlannerMetadata(BaseModel):
         description="SHA256 hash of the rendered prompt (includes runtime goal).",
     )
     model_call_count: int = Field(
-        default=0, ge=0, description="Number of model API calls made (0=stub, 1=mistral)."
+        default=0,
+        ge=0,
+        description="Number of model API calls made (0=stub, 1=mistral).",
     )
     planner_invocation_count: int = Field(
-        default=1, ge=1, description="Number of planner invocations (always >= model_call_count)."
+        default=1,
+        ge=1,
+        description="Number of planner invocations (always >= model_call_count).",
     )
     input_tokens: int | None = Field(
         default=None, ge=0, description="Input tokens used (None if not available)."
@@ -187,6 +199,10 @@ class PlannerMetadata(BaseModel):
     )
     total_tokens: int | None = Field(
         default=None, ge=0, description="Total tokens used (None if not available)."
+    )
+    provider_request_id: str | None = Field(
+        default=None,
+        description="Provider-specific request ID (e.g., Mistral response.id).",
     )
 
     @field_validator("template_hash", "rendered_hash")
@@ -389,44 +405,10 @@ class EvidenceRecord(BaseModel):
         return v.strip()
 
 
-class Plan(BaseModel):
-    """The FS-ASM plan containing tasks to execute."""
-
-    plan_id: str = Field(..., description="Unique identifier for this plan.")
-    run_id: str = Field(..., description="The run ID this plan belongs to.")
-    goal: str = Field(..., min_length=1, description="The goal this plan addresses.")
-    tasks: list[ChildTask] = Field(..., description="List of tasks in this plan.")
-
-    @field_validator("tasks")
-    @classmethod
-    def validate_tasks(cls, v: list[ChildTask]) -> list[ChildTask]:
-        if len(v) != 3:
-            raise ValueError("Plan must contain exactly 3 ChildTasks for milestone 1")
-        return v
-
-    @model_validator(mode="after")
-    def validate_task_ids_unique(self) -> "Plan":
-        task_ids = [t.task_id for t in self.tasks]
-        if len(task_ids) != len(set(task_ids)):
-            raise ValueError("Task IDs must be unique within a plan")
-        return self
-
-    @model_validator(mode="after")
-    def validate_dependencies_exist(self) -> "Plan":
-        all_task_ids = {t.task_id for t in self.tasks}
-        for task in self.tasks:
-            for dep_id in task.dependencies:
-                if dep_id not in all_task_ids:
-                    raise ValueError(
-                        f"Task {task.task_id} depends on non-existent task {dep_id}"
-                    )
-        return self
-
-
 class PlannerOutput(BaseModel):
     """
     Complete planner output - proposal + assembled Plan + metadata.
-    
+
     The proposal contains the semantic content from LLM.
     The plan contains the runtime-assembled Plan with all runtime-owned fields.
     The metadata contains observability data.
@@ -435,7 +417,9 @@ class PlannerOutput(BaseModel):
     proposal: PlannerProposal = Field(
         ..., description="Semantic proposal from LLM (no runtime-owned fields)."
     )
-    plan: Plan = Field(..., description="Runtime-assembled Plan with all runtime-owned fields.")
+    plan: Plan = Field(
+        ..., description="Runtime-assembled Plan with all runtime-owned fields."
+    )
     metadata: PlannerMetadata = Field(
         ..., description="Observability metadata for this planning operation."
     )

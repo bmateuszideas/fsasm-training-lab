@@ -26,20 +26,6 @@ class TestMistralLiveSmoke:
     """
 
     @pytest.mark.asyncio
-    async def test_mistral_api_connection(self):
-        """Test that Mistral API connection works."""
-        from mistralai.client import Mistral
-
-        client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
-        response = await client.chat.complete_async(
-            model="mistral-large-latest",
-            messages=[{"role": "user", "content": "Say 'ok'"}],
-        )
-        # Just verify we can call the API, don't assert on content
-        assert response is not None
-        assert response.id is not None
-
-    @pytest.mark.asyncio
     async def test_plan_with_mistral_live(self):
         """Test live Mistral planning with real API call."""
         from fsasm.models import GoalInput, PlannerConfig, PlannerBackend

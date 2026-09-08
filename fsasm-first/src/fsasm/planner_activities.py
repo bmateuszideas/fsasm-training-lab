@@ -1,14 +1,13 @@
 """FS-ASM Planner Activities - activity-based planning with Mistral and Stub backends."""
 
 import hashlib
-import os
 
 import mistralai.workflows as workflows
 from mistralai.workflows import activity
 from mistralai.workflows.plugins.mistralai import (
     ChatCompletionRequest,
+    ResponseFormat,
     UserMessage,
-    chat_parse_to_model,
     mistralai_chat_complete,
 )
 
@@ -22,7 +21,6 @@ with workflows.workflow.unsafe.imports_passed_through():
         PlannerMetadata,
         PlannerOutput,
         PlannerProposal,
-        TaskProposal,
     )
     from fsasm.planner import assemble_plan, PlannerStub
 
@@ -115,13 +113,13 @@ PROMPT_TEMPLATES: dict[str, tuple[str, str]] = {
 def get_planner_prompt_template(version: str) -> tuple[str, str]:
     """
     Get prompt template and its pre-computed hash by version.
-    
+
     Args:
         version: The prompt version (e.g., "v1.0")
-    
+
     Returns:
         Tuple of (template, template_hash)
-    
+
     Raises:
         ValueError: If version is not found.
     """
@@ -145,17 +143,17 @@ async def plan_with_stub(
 ) -> PlannerOutput:
     """
     Plan using the deterministic stub planner.
-    
+
     This is an activity because it could later call an LLM.
     For now, it uses the deterministic PlannerStub.
-    
+
     Args:
         goal_input: The GoalInput with goal and optional run_id.
         config: The PlannerConfig with backend and other settings.
-    
+
     Returns:
         PlannerOutput with proposal, assembled plan, and stub metadata.
-    
+
     Raises:
         ConfigurationError: If backend is not STUB.
     """
@@ -191,6 +189,7 @@ async def plan_with_stub(
         input_tokens=None,
         output_tokens=None,
         total_tokens=None,
+        provider_request_id=None,
     )
 
     return PlannerOutput(
@@ -210,17 +209,17 @@ async def plan_with_mistral(
 ) -> PlannerOutput:
     """
     Plan using Mistral API with structured output.
-    
+
     Makes EXACTLY ONE model call per planning operation.
     Both structured proposal and token usage come from the same response.
-    
+
     Args:
         goal_input: The GoalInput with goal and optional run_id.
         config: The PlannerConfig with backend='mistral' and model_name.
-    
+
     Returns:
         PlannerOutput with proposal, assembled plan, and Mistral metadata.
-    
+
     Raises:
         ConfigurationError: If backend is not MISTRAL or model_name is missing.
     """
@@ -250,7 +249,9 @@ async def plan_with_mistral(
         messages=[UserMessage(content=rendered_prompt)],
         temperature=config.temperature,
         max_tokens=config.max_tokens,
-        response_format={"type": "json_object"},
+        response_format=ResponseFormat(type="json_object"),  # Ensures JSON object mode
+        # Note: response_format ensures JSON output, but schema validation happens below
+        # via json.loads(...) -> PlannerProposal(...) - single model call only.
     )
 
     # Single model call - get both structured output AND usage from same response
@@ -263,8 +264,22 @@ async def plan_with_mistral(
     # The response content is JSON, parse it to PlannerProposal
     import json
 
-    response_content = response.choices[0].message.content
-    response_data = json.loads(response_content)
+    # Get the message content safely
+    message = response.choices[0].message
+    response_content = message.content if message else ""
+
+    # response_content can be str or list of chunks, handle both
+    if isinstance(response_content, str):
+        content_str = response_content
+    else:
+        # Join chunks if it's a list
+        content_str = (
+            "".join(str(chunk) for chunk in response_content)
+            if response_content
+            else ""
+        )
+
+    response_data = json.loads(content_str)
     proposal = PlannerProposal(**response_data)
 
     # Assemble plan using shared assembler
@@ -285,9 +300,10 @@ async def plan_with_mistral(
         rendered_hash=rendered_hash,
         model_call_count=1,  # Exactly one model call
         planner_invocation_count=1,
-        input_tokens=usage.input_tokens if usage else None,
-        output_tokens=usage.output_tokens if usage else None,
+        input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+        output_tokens=getattr(usage, "completion_tokens", None) if usage else None,
         total_tokens=usage.total_tokens if usage else None,
+        provider_request_id=response.id,
     )
 
     return PlannerOutput(
@@ -307,14 +323,14 @@ async def plan_activity(
 ) -> PlannerOutput:
     """
     Main planning activity - delegates to appropriate backend.
-    
+
     Args:
         goal_input: The GoalInput with goal and optional run_id.
         config: The PlannerConfig specifying which backend to use.
-    
+
     Returns:
         PlannerOutput from the selected backend.
-    
+
     Raises:
         ConfigurationError: If backend is invalid or required config is missing.
     """

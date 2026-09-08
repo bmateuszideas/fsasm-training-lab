@@ -169,6 +169,143 @@ class TestAssemblePlan:
         # Task 3 should depend on TASK-001 and TASK-002
         assert set(plan.tasks[2].dependencies) == {"TASK-001", "TASK-002"}
 
+    def test_assemble_plan_rejects_dependency_0(self):
+        """Test that assembler rejects dependency sequence 0."""
+        goal_input = GoalInput(goal="Test goal")
+        proposal = PlannerProposal(
+            tasks=[
+                TaskProposal(
+                    title="Task 1",
+                    description="Desc 1",
+                    dependencies=[0],  # Invalid: 0 is not >= 1
+                    verification_type="schema",
+                    verification_expected="expected 1",
+                ),
+                TaskProposal(
+                    title="Task 2",
+                    description="Desc 2",
+                    dependencies=[],
+                    verification_type="exists",
+                    verification_expected="expected 2",
+                ),
+                TaskProposal(
+                    title="Task 3",
+                    description="Desc 3",
+                    dependencies=[],
+                    verification_type="custom",
+                    verification_expected="expected 3",
+                ),
+            ]
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            assemble_plan(goal_input, proposal)
+
+        assert "invalid dependency sequence 0" in str(exc_info.value)
+        assert "1 <= dep_seq" in str(exc_info.value)
+
+    def test_assemble_plan_rejects_dependency_4(self):
+        """Test that assembler rejects dependency sequence > number of tasks."""
+        goal_input = GoalInput(goal="Test goal")
+        proposal = PlannerProposal(
+            tasks=[
+                TaskProposal(
+                    title="Task 1",
+                    description="Desc 1",
+                    dependencies=[4],  # Invalid: no task with sequence 4
+                    verification_type="schema",
+                    verification_expected="expected 1",
+                ),
+                TaskProposal(
+                    title="Task 2",
+                    description="Desc 2",
+                    dependencies=[],
+                    verification_type="exists",
+                    verification_expected="expected 2",
+                ),
+                TaskProposal(
+                    title="Task 3",
+                    description="Desc 3",
+                    dependencies=[],
+                    verification_type="custom",
+                    verification_expected="expected 3",
+                ),
+            ]
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            assemble_plan(goal_input, proposal)
+
+        assert "invalid dependency sequence 4" in str(exc_info.value)
+
+    def test_assemble_plan_rejects_self_dependency(self):
+        """Test that assembler rejects self-dependency."""
+        goal_input = GoalInput(goal="Test goal")
+        proposal = PlannerProposal(
+            tasks=[
+                TaskProposal(
+                    title="Task 1",
+                    description="Desc 1",
+                    dependencies=[],
+                    verification_type="schema",
+                    verification_expected="expected 1",
+                ),
+                TaskProposal(
+                    title="Task 2",
+                    description="Desc 2",
+                    dependencies=[2],  # Invalid: self-dependency
+                    verification_type="exists",
+                    verification_expected="expected 2",
+                ),
+                TaskProposal(
+                    title="Task 3",
+                    description="Desc 3",
+                    dependencies=[],
+                    verification_type="custom",
+                    verification_expected="expected 3",
+                ),
+            ]
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            assemble_plan(goal_input, proposal)
+
+        assert "invalid dependency sequence 2" in str(exc_info.value)
+
+    def test_assemble_plan_rejects_future_dependency(self):
+        """Test that assembler rejects future dependency."""
+        goal_input = GoalInput(goal="Test goal")
+        proposal = PlannerProposal(
+            tasks=[
+                TaskProposal(
+                    title="Task 1",
+                    description="Desc 1",
+                    dependencies=[],
+                    verification_type="schema",
+                    verification_expected="expected 1",
+                ),
+                TaskProposal(
+                    title="Task 2",
+                    description="Desc 2",
+                    dependencies=[3],  # Invalid: depends on future task
+                    verification_type="exists",
+                    verification_expected="expected 2",
+                ),
+                TaskProposal(
+                    title="Task 3",
+                    description="Desc 3",
+                    dependencies=[],
+                    verification_type="custom",
+                    verification_expected="expected 3",
+                ),
+            ]
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            assemble_plan(goal_input, proposal)
+
+        assert "invalid dependency sequence 3" in str(exc_info.value)
+
     def test_assemble_plan_authoritative_goal_from_input(self):
         """Test that Plan.goal comes from GoalInput, not from proposal."""
         goal_input = GoalInput(goal="Authoritative goal from input")
