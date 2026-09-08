@@ -1,13 +1,16 @@
 """Tests for FS-ASM Milestone One Workflow."""
 
+import asyncio
 import json
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from fsasm.models import GoalInput, Plan
 from fsasm.persistence import RuntimePersistence
+from mistralai.workflows.testing import create_test_worker
 
 
 class TestFsasmMilestoneOneWorkflow:
@@ -207,6 +210,84 @@ class TestFsasmMilestoneOneWorkflow:
         result = await workflow_module.validate_plan_activity(plan)
         assert isinstance(result, Plan)
         assert len(result.tasks) == 3
+
+    # =========================================================================
+    # WORKFLOW-LEVEL TESTS (using Mistral Workflows testing utilities)
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_workflow_level_execution_with_test_worker(
+        self, temporal_env, workflow_module
+    ):
+        """
+        Real workflow-level test using Mistral Workflows testing utilities.
+        
+        This test uses create_test_worker to start a real worker and execute
+        the workflow through the Mistral Workflows API, rather than calling
+        workflow.run() directly.
+        
+        This is the proper way to test workflows according to:
+        .agents/skills/workflows/references/guides/testing.md
+        """
+        from src.workflows.fsasm_milestone_one import (
+            FsasmMilestoneOneWorkflow,
+            create_input_activity,
+            plan_activity,
+            validate_plan_activity,
+            verify_run_activity,
+            persist_plan_and_state_activity,
+            persist_evidence_activity,
+            persist_final_state_activity,
+        )
+        
+        WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=10)
+        
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneOneWorkflow],
+            activities=[
+                create_input_activity,
+                plan_activity,
+                validate_plan_activity,
+                verify_run_activity,
+                persist_plan_and_state_activity,
+                persist_evidence_activity,
+                persist_final_state_activity,
+            ],
+        ):
+            # Execute workflow through the client API
+            handle = await temporal_env.client.start_workflow(
+                "fsasm-milestone-one",
+                {"goal": "Test workflow level execution"},
+                id="test-fsasm-workflow-level",
+                task_queue="test-task-queue",
+                execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
+            )
+            
+            # Wait for result with client-side timeout as fallback
+            result = await asyncio.wait_for(
+                handle.result(),
+                timeout=15
+            )
+            
+            # Verify structured result
+            assert isinstance(result, dict)
+            assert "run_id" in result
+            assert "goal" in result
+            assert result["goal"] == "Test workflow level execution"
+            assert "status" in result
+            assert result["status"] == "PASSED"
+            assert "success" in result
+            assert result["success"] is True
+            assert "plan_id" in result
+            assert "task_count" in result
+            assert result["task_count"] == 3
+            assert "task_ids" in result
+            assert len(result["task_ids"]) == 3
+            assert "evidence_count" in result
+            assert result["evidence_count"] > 0
+            assert "verification_status" in result
+            assert result["verification_status"] == "PASS"
 
     # =========================================================================
     # END-TO-END FILE SYSTEM TESTS

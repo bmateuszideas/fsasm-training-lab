@@ -3,21 +3,25 @@
 import logging
 
 import mistralai.workflows as workflows
+from mistralai.workflows import workflow
 from pydantic import BaseModel
 
-from fsasm.models import (
-    EvidenceRecord,
-    GoalInput,
-    Plan,
-    RunState,
-    RunStatus,
-    VerificationResult,
-    VerificationResultStatus,
-)
-from fsasm.planner import PlannerStub
-from fsasm.verifier import DeterministicVerifier
-from fsasm.persistence import RuntimePersistence
-from fsasm.transitions import transition_run
+# Import fsasm modules - these are used in activities, not workflow code directly
+# Mark them as pass-through for sandbox compatibility
+with workflow.unsafe.imports_passed_through():
+    from fsasm.models import (
+        EvidenceRecord,
+        GoalInput,
+        Plan,
+        RunState,
+        RunStatus,
+        VerificationResult,
+        VerificationResultStatus,
+    )
+    from fsasm.planner import PlannerStub
+    from fsasm.verifier import DeterministicVerifier
+    from fsasm.persistence import RuntimePersistence
+    from fsasm.transitions import transition_run
 
 logger = logging.getLogger(__name__)
 
