@@ -1,4 +1,4 @@
-.PHONY: start-worker execute installdeps lint format typecheck lint-workflows check start-examples execute-insurance-claims execute-cargo-release execute-code-modernization
+.PHONY: start-worker execute installdeps lint format typecheck lint-workflows check test start-examples execute-insurance-claims execute-cargo-release execute-code-modernization
 
 ## Install dependencies
 installdeps:
