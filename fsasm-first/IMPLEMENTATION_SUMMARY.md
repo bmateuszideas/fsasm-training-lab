@@ -46,17 +46,15 @@ Planner Stub Activity (deterministic, creates exactly 3 tasks)
     ↓
 Validate Plan (Pydantic + domain rules)
     ↓
-Persist Plan & State Activity
+Persist Plan & State Activity (RunState created as CREATED)
     ↓
-RunState Transition: CREATED → PLANNED
+RunState Transition: CREATED → PLANNED (via transition_run())
     ↓
-Verification Activity (deterministic checks)
+Persist Evidence Activity (pre-verification: plan, state)
     ↓
-Persist Evidence Activity
+Final Verification Activity (with all evidence records)
     ↓
-Re-run Verification with Evidence Records
-    ↓
-Persist Final State & Log Activity
+Persist Final State Activity (create verification evidence, transition to PASSED/FAILED)
     ↓
 Return Structured Result
 ```
@@ -108,13 +106,23 @@ Explicit transition validation with `transition_run()`:
 
 ```python
 # In fsasm_milestone_one.py
-if state.status == RunStatus.CREATED:
-    transition_run(state, RunStatus.PLANNED)
+# RunState is created with CREATED status
+state = RunState(
+    run_id=run_id,
+    goal=goal_input.goal,
+    status=RunStatus.CREATED,  # Always starts as CREATED
+    ...
+)
+
+# Then transition to PLANNED via explicit function
+transition_run(state, RunStatus.PLANNED)
 ```
+
+**Critical Fix:** RunState is now **always created as CREATED**, and transitions to PLANNED happen **exclusively** through `transition_run()`. This ensures proper state machine semantics where state changes only occur through explicit transition functions.
 
 Illegal transitions raise `TransitionError`.
 
-### 3. Evidence Validation
+### 3. Evidence Validation & Verification Flow
 
 **Critical Fix:** The verifier now **FAILs** when evidence list is empty:
 
@@ -133,6 +141,19 @@ else:
         message="No evidence records provided or list is empty",
     ))
 ```
+
+**Verification Flow Fix:** Implemented a single coherent verification flow:
+
+```
+1. persist_evidence_activity -> creates pre-verification evidence (plan, state)
+2. verify_run_activity -> FINAL verification with all evidence records
+3. persist_final_state_activity -> 
+   a. creates verification evidence with actual PASS/FAIL status
+   b. transitions RUNNING -> PASSED/FAILED
+   c. saves final state
+```
+
+This ensures **EvidenceRecords never document FAIL when the final run ends with PASS**. This was a critical inconsistency that has been resolved.
 
 ### 4. Atomic Persistence
 
@@ -155,12 +176,13 @@ os.replace(temp_path, path)
 - Filesystem I/O belongs in **activities**
 - No direct `open()`, network calls, or environment lookups in workflow logic
 - Uses `@workflow.define` decorator pattern
+- Imports wrapped in `workflow.unsafe.imports_passed_through()` for sandbox compatibility
 
 ---
 
 ## Test Coverage
 
-### Unit Tests (156 passed)
+### Unit Tests (157 passed)
 
 | Test File | Coverage |
 |-----------|----------|
@@ -169,7 +191,7 @@ os.replace(temp_path, path)
 | `test_persistence.py` | Atomic save/load, file operations |
 | `test_planner_stub.py` | Deterministic 3-task plan generation |
 | `test_verifier.py` | All verification checks, PASS/FAIL cases |
-| `test_fsasm_workflow.py` | Workflow integration, file system verification |
+| `test_fsasm_workflow.py` | Workflow integration, file system verification, **workflow-level test** |
 
 ### Key Test Scenarios
 
@@ -179,29 +201,36 @@ os.replace(temp_path, path)
 4. **Persistence**: Atomic writes, save/load roundtrip
 5. **Evidence**: Records persisted separately from state
 6. **End-to-End**: All required files created and validated
+7. **Workflow-Level Test**: Real worker execution via `create_test_worker` and `start_workflow` API
 
-### Integration Test
+### Workflow-Level Integration Test
 
 ```python
 @pytest.mark.asyncio
-async def test_end_to_end_files_created(self, workflow_module):
-    """Test that workflow creates all required files"""
-    result = await workflow.run(input_data)
-    
-    # Verify state.json
-    assert state_path.exists()
-    assert state_data["run_id"] == result["run_id"]
-    
-    # Verify plan.json  
-    assert plan_path.exists()
-    assert len(plan_data["tasks"]) == 3
-    
-    # Verify evidence/*.json
-    assert len(evidence_files) > 0
-    
-    # Verify run.log.jsonl
-    assert run_log_path.exists()
+async def test_workflow_level_execution_with_test_worker(self, temporal_env):
+    """
+    Real workflow-level test using Mistral Workflows testing utilities.
+    Uses create_test_worker to start a real worker and execute via API.
+    """
+    async with create_test_worker(
+        temporal_env,
+        workflows=[FsasmMilestoneOneWorkflow],
+        activities=[create_input_activity, plan_activity, ...],
+    ):
+        handle = await temporal_env.client.start_workflow(
+            "fsasm-milestone-one",
+            {"goal": "Test workflow level execution"},
+            id="test-fsasm-workflow-level",
+            task_queue="test-task-queue",
+            execution_timeout=timedelta(seconds=10),
+        )
+        result = await asyncio.wait_for(handle.result(), timeout=15)
+        assert result["status"] == "PASSED"
+        assert result["task_count"] == 3
+        assert result["evidence_count"] > 0
 ```
+
+This test follows the pattern from `.agents/skills/workflows/references/guides/testing.md` and uses the proper Mistral Workflows testing utilities rather than calling `workflow.run()` directly.
 
 ---
 
@@ -218,8 +247,8 @@ All **14 criteria** from AGENTS.md are satisfied:
 - ✅ 7. Verification returns explicit PASS or FAIL
 - ✅ 8. RunState cannot become PASSED without verification PASS
 - ✅ 9. Runtime writes are atomic where state is mutable
-- ✅ 10. Unit tests pass (156 passed)
-- ✅ 11. Workflow-level test passes
+- ✅ 10. Unit tests pass (157 passed)
+- ✅ 11. Workflow-level test passes (using create_test_worker)
 - ✅ 12. make check passes (ruff, mypy, semgrep)
 - ✅ 13. No Mistral API key required for tests
 - ✅ 14. hello-world workflow remains untouched
@@ -229,9 +258,11 @@ All **14 criteria** from AGENTS.md are satisfied:
 ## Files Modified
 
 ```
+fsasm-first/src/workflows/fsasm_milestone_one.py | +6 -12 (imports in sandbox pass-through, verification flow)
 fsasm-first/src/fsasm/verifier.py                | +18 -2  (evidence validation fix)
-fsasm-first/src/workflows/fsasm_milestone_one.py |  +8   (state transition + re-verification)
-fsasm-first/tests/test_fsasm_workflow.py         | +163 -88 (integration tests)
+fsasm-first/src/workflows/fsasm_milestone_one.py | +53 -44 (single coherent verification flow)
+fsasm-first/tests/conftest.py                   | +11   (testing fixtures)
+fsasm-first/tests/test_fsasm_workflow.py         | +163 -88 (workflow-level integration test)
 fsasm-first/tests/test_verifier.py               | +16 -2  (evidence validation tests)
 ```
 
@@ -239,7 +270,7 @@ fsasm-first/tests/test_verifier.py               | +16 -2  (evidence validation 
 
 ```bash
 # All pass
-uv run pytest tests/                    # 156 passed
+uv run pytest tests/                    # 157 passed
 make check                             # ruff, mypy, semgrep all pass
 ```
 
@@ -261,15 +292,20 @@ The following are **NOT** implemented yet (per AGENTS.md scope):
 ## Commit History
 
 ```
+e0a38a0 feat: add real Mistral Workflows integration test using create_test_worker
+bdf160d fix: resolve verification/evidence inconsistency with single coherent flow
+12c0be2 fix: ensure RunState is created as CREATED and transitions to PLANNED via transition_run()
+6777d85 docs: add implementation summary for Milestone 1
 e9f8588 feat: add Mistral Workflows integration test with evidence validation
 ```
 
-Changes:
-- Add end-to-end test for state.json, plan.json, evidence/*.json
-- Fix verifier to FAIL when evidence list is empty
-- Add transition_run() call: CREATED → PLANNED
-- Re-run verification with actual evidence records
-- Update tests to match new behavior
+### Recent Fixes Summary
+
+| Commit | Fix | Details |
+|--------|-----|---------|
+| `bdf160d` | Verification/Evidence Inconsistency | Single coherent flow: pre-verification evidence → final verification → verification evidence with correct status |
+| `12c0be2` | CREATED → PLANNED Transition | RunState always created as CREATED, transition via `transition_run()` only |
+| `e0a38a0` | Workflow-Level Test | Added real integration test using `create_test_worker` and `start_workflow` API |
 
 ---
 
