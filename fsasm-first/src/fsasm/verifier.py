@@ -362,15 +362,23 @@ class DeterministicVerifier:
             state_result = self.verify_run_state(state)
             checks.extend(state_result.checks)
 
-            # Check: Evidence records exist (if provided)
-            # For milestone 1, evidence records are created AFTER verification, so they may not be available yet
-            # This is acceptable - we'll pass this check if evidence_records list is provided (even if empty)
-            if evidence_records is not None:
+            # Check: Evidence records exist
+            # For milestone 1, evidence records are created AFTER verification in the workflow
+            # We need to verify that evidence was actually created (evidence_records should have items)
+            if evidence_records is not None and len(evidence_records) > 0:
                 checks.append(
                     VerificationCheck(
                         check_name="Evidence records exist",
                         passed=True,
-                        message=f"Evidence records list provided with {len(evidence_records)} records",
+                        message=f"Found {len(evidence_records)} evidence records",
+                    )
+                )
+            else:
+                checks.append(
+                    VerificationCheck(
+                        check_name="Evidence records exist",
+                        passed=False,
+                        message="No evidence records provided or list is empty",
                     )
                 )
 

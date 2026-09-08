@@ -337,6 +337,10 @@ class FsasmMilestoneOneWorkflow:
         # Step 4: Persist plan/state activity
         plan, state = await persist_plan_and_state_activity(validated_plan, goal_input)
 
+        # Ensure state transitions from CREATED to PLANNED
+        if state.status == RunStatus.CREATED:
+            transition_run(state, RunStatus.PLANNED)
+
         # Step 5: Verification activity (deterministic)
         state, verification_result = await verify_run_activity(state, plan)
 
@@ -344,6 +348,10 @@ class FsasmMilestoneOneWorkflow:
         evidence_records = await persist_evidence_activity(
             state.run_id, verification_result, plan
         )
+
+        # Step 6.5: Re-run verification with actual evidence records
+        verifier = DeterministicVerifier()
+        verification_result = verifier.verify_full_run(state, plan, evidence_records)
 
         # Step 7: Persist final state/log activity
         final_state = await persist_final_state_activity(

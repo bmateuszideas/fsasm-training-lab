@@ -438,8 +438,9 @@ class TestDeterministicVerifier:
         self, verifier: DeterministicVerifier, valid_state: RunState
     ) -> None:
         """Test that full run verification passes for valid run."""
+        # Test with empty list - should FAIL now
         result = verifier.verify_full_run(valid_state, valid_state.plan, [])
-        assert result.status == VerificationResultStatus.PASS
+        assert result.status == VerificationResultStatus.FAIL
         assert result.run_id == valid_state.run_id
 
     def test_verify_full_run_with_evidence_pass(
@@ -468,14 +469,17 @@ class TestDeterministicVerifier:
     def test_verify_full_run_no_evidence_fails(
         self, verifier: DeterministicVerifier, valid_state: RunState
     ) -> None:
-        """Test that full run verification passes even without evidence (milestone 1 behavior).
+        """Test that full run verification fails when evidence list is empty.
         
-        For milestone 1, we allow empty evidence list since evidence is created after verification.
-        This test is updated to reflect the current implementation.
+        Verifier should FAIL when evidence_records is None or empty list.
         """
         result = verifier.verify_full_run(valid_state, valid_state.plan, None)
-        # With our current implementation, None evidence is treated as not provided, which passes
-        assert result.status == VerificationResultStatus.PASS
+        # With our current implementation, None/empty evidence should FAIL
+        assert result.status == VerificationResultStatus.FAIL
+        
+        # Also test with empty list
+        result2 = verifier.verify_full_run(valid_state, valid_state.plan, [])
+        assert result2.status == VerificationResultStatus.FAIL
 
     def test_verify_full_run_no_plan_fails(
         self, verifier: DeterministicVerifier
