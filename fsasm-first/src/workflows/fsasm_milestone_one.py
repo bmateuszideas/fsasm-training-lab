@@ -118,12 +118,13 @@ async def persist_plan_and_state_activity(
     """
     persistence = RuntimePersistence()
 
-    # Create initial run state
+    # Create initial run state with CREATED status
+    # Transition to PLANNED will happen via transition_run() in the workflow
     run_id = plan.run_id
     state = RunState(
         run_id=run_id,
         goal=goal_input.goal,
-        status=RunStatus.PLANNED,
+        status=RunStatus.CREATED,
         plan=plan,
         active_task_id=None,
         completed_task_ids=[],
@@ -143,7 +144,7 @@ async def persist_plan_and_state_activity(
             "event": "run_created",
             "run_id": run_id,
             "goal": goal_input.goal,
-            "status": RunStatus.PLANNED.value,
+            "status": RunStatus.CREATED.value,
             "timestamp": state.created_at,
         },
     )
@@ -337,9 +338,8 @@ class FsasmMilestoneOneWorkflow:
         # Step 4: Persist plan/state activity
         plan, state = await persist_plan_and_state_activity(validated_plan, goal_input)
 
-        # Ensure state transitions from CREATED to PLANNED
-        if state.status == RunStatus.CREATED:
-            transition_run(state, RunStatus.PLANNED)
+        # Transition from CREATED to PLANNED via explicit transition function
+        transition_run(state, RunStatus.PLANNED)
 
         # Step 5: Verification activity (deterministic)
         state, verification_result = await verify_run_activity(state, plan)
