@@ -1,5 +1,6 @@
 """FS-ASM domain models - Pydantic schemas for the core domain."""
 
+import hashlib
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -11,6 +12,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # =============================================================================
 # ENUMS
 # =============================================================================
+
+
+class PlannerBackend(str, Enum):
+    """Available planner backends."""
+
+    STUB = "stub"
+    MISTRAL = "mistral"
 
 
 class TaskStatus(str, Enum):
@@ -55,6 +63,148 @@ class VerificationType(str, Enum):
 # =============================================================================
 # MODELS
 # =============================================================================
+
+
+class TaskProposal(BaseModel):
+    """
+    Semantic task proposal from LLM - contains only content, no runtime-owned fields.
+    
+    Dependencies use proposal-local references (sequence numbers) that the assembler
+    maps deterministically to runtime task IDs.
+    """
+
+    title: str = Field(..., min_length=1, description="Short title of the task.")
+    description: str = Field(
+        ..., min_length=1, description="Detailed description of the task."
+    )
+    dependencies: list[int] = Field(
+        default_factory=list,
+        description="List of sequence numbers this task depends on (proposal-local refs).",
+    )
+    verification_type: str = Field(
+        ...,
+        description="Type of verification: 'schema', 'exists', 'count', 'custom'.",
+    )
+    verification_expected: str = Field(
+        ..., description="Expected value or condition for verification."
+    )
+    constraints: list[str] = Field(
+        default_factory=list, description="List of constraints for this task."
+    )
+    allowed_files: list[str] = Field(
+        default_factory=list,
+        description="List of file patterns this task is allowed to modify.",
+    )
+    expected_evidence: list[str] = Field(
+        default_factory=list, description="List of expected evidence types/paths."
+    )
+
+    @field_validator("title", "description", "verification_type", "verification_expected")
+    @classmethod
+    def text_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text cannot be empty")
+        return v.strip()
+
+
+class PlannerProposal(BaseModel):
+    """
+    Semantic plan proposal from LLM - contains only content, no runtime-owned fields.
+    
+    The authoritative Plan.goal always comes from GoalInput.goal.
+    Task IDs are assigned by the deterministic assembler, not by the LLM.
+    """
+
+    tasks: list[TaskProposal] = Field(
+        ..., min_length=3, max_length=3, description="Exactly 3 task proposals."
+    )
+
+    @field_validator("tasks")
+    @classmethod
+    def validate_task_count(cls, v: list[TaskProposal]) -> list[TaskProposal]:
+        if len(v) != 3:
+            raise ValueError("Proposal must contain exactly 3 TaskProposal for milestone 1")
+        return v
+
+
+class PlannerConfig(BaseModel):
+    """Serializable planner configuration for workflow input."""
+
+    backend: PlannerBackend = Field(
+        ..., description="Selected backend: 'stub' or 'mistral'."
+    )
+    model_name: str | None = Field(
+        default=None, description="Model name (required for backend='mistral')."
+    )
+    model_version: str | None = Field(default=None, description="Model version.")
+    prompt_version: str = Field(default="v1.0", description="Prompt template version.")
+    max_tokens: int = Field(default=4096, ge=1, description="Maximum tokens for LLM response.")
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="Sampling temperature.")
+
+
+class PlannerMetadata(BaseModel):
+    """
+    Planner metadata for observability - explicitly tied to run_id.
+    
+    Contains all required observability fields:
+    - provider, requested/resolved model, prompt_version, prompt hash
+    - model_call_count (0 for stub, 1 for mistral)
+    - token usage (None if not available from the chosen method)
+    - run_id for traceability
+    """
+
+    run_id: str = Field(..., description="The run_id this metadata belongs to.")
+    provider: str = Field(..., description="Provider name: 'stub' or 'mistral'.")
+    requested_model: str | None = Field(
+        default=None, description="Requested model name (None for stub)."
+    )
+    resolved_model: str | None = Field(
+        default=None, description="Actually resolved model name."
+    )
+    model_version: str | None = Field(
+        default=None, description="Model version (if available)."
+    )
+    prompt_version: str = Field(..., description="Prompt template version used.")
+    template_hash: str = Field(
+        ...,
+        description="SHA256 hash of the prompt template (deterministic, no runtime data).",
+    )
+    rendered_hash: str = Field(
+        ...,
+        description="SHA256 hash of the rendered prompt (includes runtime goal).",
+    )
+    model_call_count: int = Field(
+        default=0, ge=0, description="Number of model API calls made (0=stub, 1=mistral)."
+    )
+    planner_invocation_count: int = Field(
+        default=1, ge=1, description="Number of planner invocations (always >= model_call_count)."
+    )
+    input_tokens: int | None = Field(
+        default=None, ge=0, description="Input tokens used (None if not available)."
+    )
+    output_tokens: int | None = Field(
+        default=None, ge=0, description="Output tokens used (None if not available)."
+    )
+    total_tokens: int | None = Field(
+        default=None, ge=0, description="Total tokens used (None if not available)."
+    )
+
+    @field_validator("template_hash", "rendered_hash")
+    @classmethod
+    def validate_hash_length(cls, v: str) -> str:
+        if len(v) != 64:
+            raise ValueError("SHA256 hash must be 64 characters")
+        return v.lower()
+
+    @classmethod
+    def compute_template_hash(cls, template: str) -> str:
+        """Compute SHA256 hash of a prompt template."""
+        return hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def compute_rendered_hash(cls, rendered: str) -> str:
+        """Compute SHA256 hash of a rendered prompt."""
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
 class GoalInput(BaseModel):
@@ -237,6 +387,58 @@ class EvidenceRecord(BaseModel):
         if not v.strip():
             raise ValueError("evidence_id cannot be empty")
         return v.strip()
+
+
+class Plan(BaseModel):
+    """The FS-ASM plan containing tasks to execute."""
+
+    plan_id: str = Field(..., description="Unique identifier for this plan.")
+    run_id: str = Field(..., description="The run ID this plan belongs to.")
+    goal: str = Field(..., min_length=1, description="The goal this plan addresses.")
+    tasks: list[ChildTask] = Field(..., description="List of tasks in this plan.")
+
+    @field_validator("tasks")
+    @classmethod
+    def validate_tasks(cls, v: list[ChildTask]) -> list[ChildTask]:
+        if len(v) != 3:
+            raise ValueError("Plan must contain exactly 3 ChildTasks for milestone 1")
+        return v
+
+    @model_validator(mode="after")
+    def validate_task_ids_unique(self) -> "Plan":
+        task_ids = [t.task_id for t in self.tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("Task IDs must be unique within a plan")
+        return self
+
+    @model_validator(mode="after")
+    def validate_dependencies_exist(self) -> "Plan":
+        all_task_ids = {t.task_id for t in self.tasks}
+        for task in self.tasks:
+            for dep_id in task.dependencies:
+                if dep_id not in all_task_ids:
+                    raise ValueError(
+                        f"Task {task.task_id} depends on non-existent task {dep_id}"
+                    )
+        return self
+
+
+class PlannerOutput(BaseModel):
+    """
+    Complete planner output - proposal + assembled Plan + metadata.
+    
+    The proposal contains the semantic content from LLM.
+    The plan contains the runtime-assembled Plan with all runtime-owned fields.
+    The metadata contains observability data.
+    """
+
+    proposal: PlannerProposal = Field(
+        ..., description="Semantic proposal from LLM (no runtime-owned fields)."
+    )
+    plan: Plan = Field(..., description="Runtime-assembled Plan with all runtime-owned fields.")
+    metadata: PlannerMetadata = Field(
+        ..., description="Observability metadata for this planning operation."
+    )
 
 
 class RunState(BaseModel):
