@@ -29,9 +29,6 @@ check: lint typecheck lint-workflows
 test:
 	uv run pytest
 
-test:
-	uv run pytest
-
 ## Auto-discover all workflows and start the worker (with file-watch auto-reload)
 start-worker:
 	uv run python -m entrypoints.dev

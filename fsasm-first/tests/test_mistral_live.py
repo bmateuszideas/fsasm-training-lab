@@ -37,7 +37,7 @@ class TestMistralLiveSmoke:
             model_name="mistral-large-latest",
             prompt_version="v1.0",
         )
-        goal_input = GoalInput(goal="Napisz plan dla: Stw2rz prost funkcj Python do sortowania listy")
+        goal_input = GoalInput(goal="Napisz plan dla: Stwórz prostą funkcję Python do sortowania listy")
 
         output = await plan_with_mistral(goal_input, config)
 
@@ -102,7 +102,7 @@ class TestMistralLiveSmoke:
             model_name="mistral-large-latest",
             prompt_version="v1.0",
         )
-        goal_input = GoalInput(goal="Napisz plan dla: Zr2b porzdki w projekcie")
+        goal_input = GoalInput(goal="Napisz plan dla: Zrób porządki w projekcie")
 
         output = await plan_with_mistral(goal_input, config)
 
