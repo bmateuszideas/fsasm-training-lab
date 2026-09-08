@@ -157,23 +157,20 @@ async def persist_plan_and_state_activity(
     retry_policy_max_attempts=1,
 )
 async def verify_run_activity(
-    state: RunState, plan: Plan
-) -> tuple[RunState, VerificationResult]:
+    state: RunState, plan: Plan, evidence_records: list[EvidenceRecord]
+) -> VerificationResult:
     """
-    Verify the run using deterministic verifier.
+    Verify the run using deterministic verifier with evidence.
 
     This is an activity because verification could later use an LLM.
     For milestone 1, it uses deterministic checks.
+
+    Note: This is the FINAL verification that determines pass/fail status.
+    Evidence records must already be persisted before calling this.
     """
     verifier = DeterministicVerifier()
-
-    # Create evidence record for the verification itself
-    # (This will be saved separately in the next activity)
-
-    # Run verification
-    verification_result = verifier.verify_full_run(state, plan, [])
-
-    return state, verification_result
+    verification_result = verifier.verify_full_run(state, plan, evidence_records)
+    return verification_result
 
 
 @workflows.activity(
@@ -182,13 +179,14 @@ async def verify_run_activity(
 )
 async def persist_evidence_activity(
     run_id: str,
-    verification_result: VerificationResult,
     plan: Plan,
 ) -> list[EvidenceRecord]:
     """
     Persist evidence records separately from state.
 
     This is an activity because it performs filesystem I/O.
+    Creates evidence for the plan and run state only (pre-verification).
+    Final verification evidence is created after final verification passes.
     """
     persistence = RuntimePersistence()
 
@@ -199,23 +197,61 @@ async def persist_evidence_activity(
         evidence_id=f"evidence-plan-{run_id}",
         run_id=run_id,
         task_id=None,
-        kind="plan_validation",
+        kind="plan",
         source="fsasm_milestone_one_workflow",
         payload={
             "plan_id": plan.plan_id,
             "task_count": len(plan.tasks),
             "task_ids": [t.task_id for t in plan.tasks],
-            "validation_passed": verification_result.status
-            == VerificationResultStatus.PASS,
         },
     )
     persistence.save_evidence(plan_evidence)
     evidence_records.append(plan_evidence)
 
-    # Create evidence for verification result
-    verification_evidence = EvidenceRecord(
-        evidence_id=f"evidence-verification-{run_id}",
+    # Create evidence for the run state
+    state_evidence = EvidenceRecord(
+        evidence_id=f"evidence-state-{run_id}",
         run_id=run_id,
+        task_id=None,
+        kind="run_state",
+        source="fsasm_milestone_one_workflow",
+        payload={
+            "run_id": run_id,
+            "status": "PLANNED",
+            "goal": plan.goal,
+        },
+    )
+    persistence.save_evidence(state_evidence)
+    evidence_records.append(state_evidence)
+
+    return evidence_records
+
+
+@workflows.activity(
+    name="fsasm-persist-final-state",
+    retry_policy_max_attempts=3,
+)
+async def persist_final_state_activity(
+    state: RunState,
+    verification_result: VerificationResult,
+    evidence_records: list[EvidenceRecord],
+) -> RunState:
+    """
+    Persist the final run state, create verification evidence, and complete the run.
+
+    This is an activity because it performs filesystem I/O.
+    Creates final verification evidence record that documents the PASS/FAIL result.
+    """
+    persistence = RuntimePersistence()
+
+    # Transition to RUNNING first
+    transition_run(state, RunStatus.RUNNING)
+
+    # Create final verification evidence BEFORE transitioning to final state
+    # This ensures evidence documents the actual verification result
+    verification_evidence = EvidenceRecord(
+        evidence_id=f"evidence-verification-{state.run_id}",
+        run_id=state.run_id,
         task_id=None,
         kind="verification_result",
         source="deterministic_verifier",
@@ -232,31 +268,7 @@ async def persist_evidence_activity(
     persistence.save_evidence(verification_evidence)
     evidence_records.append(verification_evidence)
 
-    # Save verification result to log
-    persistence.save_verification_result(verification_result)
-
-    return evidence_records
-
-
-@workflows.activity(
-    name="fsasm-persist-final-state",
-    retry_policy_max_attempts=3,
-)
-async def persist_final_state_activity(
-    state: RunState,
-    verification_result: VerificationResult,
-    evidence_records: list[EvidenceRecord],
-) -> RunState:
-    """
-    Persist the final run state and complete the run.
-
-    This is an activity because it performs filesystem I/O.
-    """
-    persistence = RuntimePersistence()
-
-    # Transition to RUNNING first, then to final state based on verification
-    transition_run(state, RunStatus.RUNNING)
-
+    # Now transition to final state based on verification
     if verification_result.status == VerificationResultStatus.PASS:
         transition_run(state, RunStatus.PASSED, verification_pass=True)
     else:
@@ -264,6 +276,9 @@ async def persist_final_state_activity(
 
     # Save final state
     persistence.save_run_state(state)
+
+    # Save verification result to log
+    persistence.save_verification_result(verification_result)
 
     # Log final result
     persistence.save_run_log_entry(
@@ -341,17 +356,11 @@ class FsasmMilestoneOneWorkflow:
         # Transition from CREATED to PLANNED via explicit transition function
         transition_run(state, RunStatus.PLANNED)
 
-        # Step 5: Verification activity (deterministic)
-        state, verification_result = await verify_run_activity(state, plan)
+        # Step 5: Persist evidence activity (pre-verification evidence)
+        evidence_records = await persist_evidence_activity(state.run_id, plan)
 
-        # Step 6: Persist evidence activity
-        evidence_records = await persist_evidence_activity(
-            state.run_id, verification_result, plan
-        )
-
-        # Step 6.5: Re-run verification with actual evidence records
-        verifier = DeterministicVerifier()
-        verification_result = verifier.verify_full_run(state, plan, evidence_records)
+        # Step 6: Final verification activity with all evidence
+        verification_result = await verify_run_activity(state, plan, evidence_records)
 
         # Step 7: Persist final state/log activity
         final_state = await persist_final_state_activity(
