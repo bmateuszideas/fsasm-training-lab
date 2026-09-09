@@ -764,3 +764,127 @@ class TestFinalizeTaskActivity:
         assert updated_state.plan.tasks[0].status == TaskStatus.FAILED
         assert updated_state.plan.tasks[1].status == TaskStatus.PENDING
         assert updated_state.plan.tasks[2].status == TaskStatus.PENDING
+
+
+class TestPersistInitialStateActivity:
+    """Tests for persist_initial_state_activity - RUNNING SEMANTICS."""
+
+    @pytest.mark.asyncio
+    async def test_persist_initial_state_planned(self):
+        """Test that persist_initial_state_activity persists state as PLANNED."""
+        from fsasm.planner_activities import plan_activity
+        from fsasm.models import GoalInput, PlannerConfig, PlannerBackend
+        from src.workflows.fsasm_milestone_three import persist_initial_state_activity
+        from fsasm.persistence import RuntimePersistence
+
+        goal_input = GoalInput(goal="Test goal", run_id="test-run-initial")
+        planner_config = PlannerConfig(
+            backend=PlannerBackend.STUB,
+            prompt_version="v1.0",
+        )
+
+        # Create plan
+        planner_output = await plan_activity(goal_input, planner_config)
+
+        # Persist initial state
+        plan, state = await persist_initial_state_activity(planner_output, goal_input)
+
+        # Verify state is PLANNED
+        assert state.status == RunStatus.PLANNED
+        assert state.active_task_id is None
+
+        # Verify all tasks are PENDING
+        for task in plan.tasks:
+            assert task.status == TaskStatus.PENDING
+
+        # Verify persisted state.json and plan.json agree
+        persistence = RuntimePersistence()
+        loaded_state = persistence.load_run_state(state.run_id)
+        loaded_plan = persistence.load_plan(state.run_id)
+
+        assert loaded_state is not None
+        assert loaded_plan is not None
+        assert loaded_state.status == RunStatus.PLANNED
+        assert loaded_state.active_task_id is None
+        for task in loaded_state.plan.tasks:
+            assert task.status == TaskStatus.PENDING
+        for task in loaded_plan.tasks:
+            assert task.status == TaskStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_prepare_task_from_planned(self):
+        """Test prepare_task_activity starting from PLANNED state."""
+        from fsasm.planner_activities import plan_activity
+        from fsasm.models import GoalInput, PlannerConfig, PlannerBackend
+        from src.workflows.fsasm_milestone_three import (
+            persist_initial_state_activity,
+            find_first_ready_task_activity,
+            prepare_task_activity,
+        )
+        from fsasm.persistence import RuntimePersistence
+
+        goal_input = GoalInput(goal="Test goal", run_id="test-run-prepare")
+        planner_config = PlannerConfig(
+            backend=PlannerBackend.STUB,
+            prompt_version="v1.0",
+        )
+
+        # Create and persist initial state
+        planner_output = await plan_activity(goal_input, planner_config)
+        plan, state = await persist_initial_state_activity(planner_output, goal_input)
+
+        # Verify starting state is PLANNED
+        assert state.status == RunStatus.PLANNED
+        assert state.active_task_id is None
+
+        # Find first eligible task
+        task = await find_first_ready_task_activity(plan, state.completed_task_ids)
+
+        # Prepare task
+        state, task = await prepare_task_activity(state, task)
+
+        # Verify RunState transitioned PLANNED -> RUNNING
+        assert state.status == RunStatus.RUNNING
+        assert state.active_task_id == task.task_id
+
+        # Verify selected task is RUNNING
+        assert task.status == TaskStatus.RUNNING
+
+        # Verify remaining tasks are PENDING
+        remaining_tasks = [t for t in state.plan.tasks if t.task_id != task.task_id]
+        for rt in remaining_tasks:
+            assert rt.status == TaskStatus.PENDING
+
+        # Verify persisted state.json and plan.json agree
+        persistence = RuntimePersistence()
+        loaded_state = persistence.load_run_state(state.run_id)
+        loaded_plan = persistence.load_plan(state.run_id)
+
+        assert loaded_state is not None
+        assert loaded_plan is not None
+        assert loaded_state.status == RunStatus.RUNNING
+        assert loaded_state.active_task_id == task.task_id
+
+        # Find the running task in loaded state and plan
+        loaded_state_task = next(
+            (t for t in loaded_state.plan.tasks if t.task_id == task.task_id), None
+        )
+        loaded_plan_task = next(
+            (t for t in loaded_plan.tasks if t.task_id == task.task_id), None
+        )
+        assert loaded_state_task is not None
+        assert loaded_plan_task is not None
+        assert loaded_state_task.status == TaskStatus.RUNNING
+        assert loaded_plan_task.status == TaskStatus.RUNNING
+
+        # Verify remaining tasks are PENDING in both
+        loaded_state_remaining = [
+            t for t in loaded_state.plan.tasks if t.task_id != task.task_id
+        ]
+        loaded_plan_remaining = [
+            t for t in loaded_plan.tasks if t.task_id != task.task_id
+        ]
+        for t in loaded_state_remaining:
+            assert t.status == TaskStatus.PENDING
+        for t in loaded_plan_remaining:
+            assert t.status == TaskStatus.PENDING

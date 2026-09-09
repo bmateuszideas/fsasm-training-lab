@@ -229,9 +229,29 @@ make check: All checks passed! (ruff, mypy, semgrep)
 - `src/fsasm/errors.py` - ProvenanceValidationError
 - `src/workflows/fsasm_milestone_three.py` - M3 workflow
 - `tests/test_executor.py` - Executor models and stub tests (19 tests)
-- `tests/test_executor_activities.py` - Executor activity tests (19 tests)
-- `tests/test_fsasm_milestone_three.py` - M3 workflow tests + workflow-level test with create_test_worker (20 tests)
+- `tests/test_executor_activities.py` - Executor activity tests including RUNNING SEMANTICS regression tests (21 tests)
+- `tests/test_fsasm_milestone_three.py` - M3 workflow tests + workflow-level test with create_test_worker including REAL WORKER EVIDENCE COUNT verification (22 tests)
 
+---
+
+## What M3 Proves
+
+Milestone 3 proves the complete execution path for ONE eligible ChildTask:
+
+**PENDING -> READY -> RUNNING -> PASSED/FAILED**
+
+With the following invariants:
+- Exactly ONE task is executed per workflow run
+- After execution: executed task = PASSED or FAILED, remaining tasks remain PENDING
+- RunState remains RUNNING (not transitioned to PASSED/FAILED)
+- All state transitions use the transition API
+- Evidence is separate from ExecutorOutput
+- Verifier receives EvidenceRecord, not ExecutorOutput
+- Executor never authorizes its own PASS
+- Verification checks: run_id match, task_id match, expected evidence kinds, VerificationSpec.expected
+- Complete provenance validation: executor_output.task_id, executor_output.run_id, metadata.task_id, metadata.run_id
+- Safe evidence IDs: deterministic ordinal-only (no LLM content embedded)
+- Durable state correctness: state.json and plan.json always agree
 ---
 
 ## What's Next (Milestone 4)
@@ -250,7 +270,13 @@ The following are **NOT** implemented yet (per AGENTS.md scope):
 ## Commit History
 
 ```
-[M3 commits will be added here]
+# M3 Commit Chain
+4e8927e fix: address remaining 3 M3 audit issues - RUNNING SEMANTICS, ACTIVITY SERIALIZATION/EVIDENCE COUNT, DOMAIN VERIFIER BOUNDARY
+9fb3c95 fix: address remaining 4 M3 audit issues - required backends, .gitignore, VerificationSpec satisfaction, duplicate persistence fix
+2cfb696 fix: address all 10 M3 audit issues - plan staleness, safe evidence IDs, VerificationSpec check, provenance, fallback, retries, dependencies, transition API, config consistency, runtime .gitignore
+79251fa feat: implement Milestone 3 - Executor + execution verification for ONE eligible ChildTask
+
+# M2 Commit Chain
 fc8addf fix: restore M2 workflow-level test, fix Makefile duplicate test target, fix UTF-8 in live tests, update IMPLEMENTATION_SUMMARY.md
 a845ffc fix: final M2 cleanup - remove duplicate test, update Makefile .PHONY, remove direct-run live workflow test, update IMPLEMENTATION_SUMMARY.md
 7c7a6c5 fix: M2 fix-pass - address all acceptance criteria

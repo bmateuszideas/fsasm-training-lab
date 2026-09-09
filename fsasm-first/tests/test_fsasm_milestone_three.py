@@ -454,3 +454,23 @@ class TestWorkflowLevelExecution:
             assert result["verification_status"] == "PASS"
             assert result["success"] is True
             assert result["status"] == "RUNNING"
+
+            # REAL WORKER EVIDENCE COUNT - verify evidence count matches persisted evidence
+            # Load all persisted evidence
+            persisted_evidence = persistence.load_all_evidence(result["run_id"])
+            assert len(persisted_evidence) > 0, "No evidence persisted"
+            assert result["evidence_count"] == len(persisted_evidence), (
+                f"evidence_count {result['evidence_count']} != len(persisted_evidence) {len(persisted_evidence)}"
+            )
+
+            # Find and verify the m3_execution_summary evidence
+            summary_evidence = next(
+                (e for e in persisted_evidence if e.kind == "m3_execution_summary"),
+                None,
+            )
+            assert summary_evidence is not None, "m3_execution_summary evidence not found"
+            assert (
+                summary_evidence.payload["total_evidence_count"] == len(persisted_evidence)
+            ), (
+                f"summary total_evidence_count {summary_evidence.payload['total_evidence_count']} != len(persisted_evidence) {len(persisted_evidence)}"
+            )
