@@ -80,7 +80,9 @@ class TestWorkflowRegistration:
             get_workflow_definition,
         )
 
-        wf_def = get_workflow_definition(fsasm_milestone_three.FsasmMilestoneThreeWorkflow)
+        wf_def = get_workflow_definition(
+            fsasm_milestone_three.FsasmMilestoneThreeWorkflow
+        )
         assert wf_def.name == "fsasm-milestone-three"
 
     def test_workflow_has_entrypoint(self):
@@ -91,8 +93,14 @@ class TestWorkflowRegistration:
     def test_workflow_description(self):
         """Test that the M3 workflow has proper description."""
         # Check description from workflow class docstring
-        assert "Milestone Three" in fsasm_milestone_three.FsasmMilestoneThreeWorkflow.__doc__
-        assert "Exactly ONE task is executed" in fsasm_milestone_three.FsasmMilestoneThreeWorkflow.__doc__
+        assert (
+            "Milestone Three"
+            in fsasm_milestone_three.FsasmMilestoneThreeWorkflow.__doc__
+        )
+        assert (
+            "Exactly ONE task is executed"
+            in fsasm_milestone_three.FsasmMilestoneThreeWorkflow.__doc__
+        )
 
 
 class TestWorkflowExecution:
@@ -116,7 +124,9 @@ class TestWorkflowExecution:
     async def test_workflow_uses_provided_run_id(self):
         """Test that workflow uses provided run_id."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal", run_id="my-custom-run-id")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal", run_id="my-custom-run-id"
+        )
 
         result = await wf.run(input)
 
@@ -226,7 +236,9 @@ class TestWorkflowExecution:
     async def test_workflow_deterministic(self):
         """Test that workflow execution is deterministic."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal", run_id="deterministic-run")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal", run_id="deterministic-run"
+        )
 
         result1 = await wf.run(input)
         result2 = await wf.run(input)
@@ -319,10 +331,7 @@ class TestWorkflowLevelExecution:
             )
 
             # Wait for result with client-side timeout as fallback
-            result = await asyncio.wait_for(
-                handle.result(),
-                timeout=15
-            )
+            result = await asyncio.wait_for(handle.result(), timeout=15)
 
             # Verify structured result
             assert isinstance(result, dict)
@@ -336,3 +345,51 @@ class TestWorkflowLevelExecution:
             assert result["success"] is not None
             assert result["executor_provider"] == "stub"
             assert result["executor_model_call_count"] == 0
+
+            # Issue 1: FINAL PLAN STALENESS - verify state.json and plan.json are consistent
+            from fsasm.persistence import RuntimePersistence
+            from fsasm.models import TaskStatus
+
+            persistence = RuntimePersistence()
+            loaded_state = persistence.load_run_state(result["run_id"])
+            loaded_plan = persistence.load_plan(result["run_id"])
+
+            # Verify state.json and plan.json contain identical task statuses
+            assert loaded_state is not None
+            assert loaded_plan is not None
+
+            # Check that executed task is PASSED/FAILED in both
+            executed_task_id = result["executed_task_id"]
+            executed_task_status = result["executed_task_status"]
+
+            # Find the executed task in both state and plan
+            state_task = next(
+                (t for t in loaded_state.plan.tasks if t.task_id == executed_task_id),
+                None,
+            )
+            plan_task = next(
+                (t for t in loaded_plan.tasks if t.task_id == executed_task_id), None
+            )
+
+            assert state_task is not None
+            assert plan_task is not None
+            assert state_task.status.value == executed_task_status
+            assert plan_task.status.value == executed_task_status
+
+            # Check that other tasks remain PENDING in both
+            other_tasks_state = [
+                t for t in loaded_state.plan.tasks if t.task_id != executed_task_id
+            ]
+            other_tasks_plan = [
+                t for t in loaded_plan.tasks if t.task_id != executed_task_id
+            ]
+
+            for task in other_tasks_state:
+                assert task.status == TaskStatus.PENDING, (
+                    f"Task {task.task_id} should be PENDING in state.plan but is {task.status}"
+                )
+
+            for task in other_tasks_plan:
+                assert task.status == TaskStatus.PENDING, (
+                    f"Task {task.task_id} should be PENDING in plan.json but is {task.status}"
+                )

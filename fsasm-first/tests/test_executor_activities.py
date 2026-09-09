@@ -285,7 +285,7 @@ class TestConvertExecutorOutputToEvidenceActivity:
             output, task, 5
         )
 
-        assert evidence_records[0].evidence_id == "evidence-test-run-TASK-001-evidence_a-005-000"
+        assert evidence_records[0].evidence_id == "evidence-test-run-TASK-001-exec-005-000"
 
 
 class TestVerifyTaskExecutionActivity:
@@ -302,7 +302,7 @@ class TestVerifyTaskExecutionActivity:
             status=TaskStatus.RUNNING,
             verification=VerificationSpec(
                 type=VerificationType.SCHEMA,
-                expected="test",
+                expected="Stub execution completed for task: TASK-001",
             ),
             expected_evidence=["test_output"],
         )
@@ -314,7 +314,16 @@ class TestVerifyTaskExecutionActivity:
                 task_id="TASK-001",
                 kind="test_output",
                 source="executor_stub",
-                payload={"data": "test"},
+                payload={
+                    "executor_output": {
+                        "task_id": "TASK-001",
+                        "run_id": run_id,
+                        "result": "Stub execution completed for task: TASK-001 - Test Task",
+                        "metadata": {},
+                    },
+                    "original_evidence_kind": "test_output",
+                    "evidence_index": 0,
+                },
             )
         ]
 
@@ -495,7 +504,7 @@ class TestVerifyTaskExecutionActivity:
             status=TaskStatus.RUNNING,
             verification=VerificationSpec(
                 type=VerificationType.SCHEMA,
-                expected="test",
+                expected="",
             ),
             expected_evidence=[],
         )
@@ -507,7 +516,15 @@ class TestVerifyTaskExecutionActivity:
                 task_id="TASK-001",
                 kind="executor_output",
                 source="executor_stub",
-                payload={"data": "test"},
+                payload={
+                    "executor_output": {
+                        "task_id": "TASK-001",
+                        "run_id": run_id,
+                        "result": "Stub execution completed for task: TASK-001 - Test Task",
+                        "metadata": {},
+                    },
+                    "original_evidence_kinds": [],
+                },
             )
         ]
 

@@ -113,6 +113,16 @@ async def validate_executor_output_provenance_activity(
             check_type="output_task_id",
         )
 
+    if executor_output.run_id != expected_run_id:
+        raise ProvenanceValidationError(
+            message=f"ExecutorOutput run_id mismatch: expected '{expected_run_id}', got '{executor_output.run_id}'",
+            expected_task_id=expected_task_id,
+            actual_task_id=executor_output.task_id,
+            expected_run_id=expected_run_id,
+            actual_run_id=executor_output.run_id,
+            check_type="output_run_id",
+        )
+
     if executor_output.metadata.task_id != expected_task_id:
         raise ProvenanceValidationError(
             message=f"ExecutorOutput metadata.task_id mismatch: expected '{expected_task_id}', got '{executor_output.metadata.task_id}'",
@@ -168,7 +178,7 @@ async def convert_executor_output_to_evidence_activity(
 
     if not task.expected_evidence:
         # Fallback: one evidence record with kind "executor_output"
-        evidence_id = f"evidence-{run_id}-{task_id}-exec-{evidence_counter:03d}"
+        evidence_id = f"evidence-{run_id}-{task_id}-exec-{evidence_counter:03d}-000"
         evidence_record = EvidenceRecord(
             evidence_id=evidence_id,
             run_id=run_id,
@@ -184,7 +194,9 @@ async def convert_executor_output_to_evidence_activity(
     else:
         # Create one EvidenceRecord per declared expected evidence kind
         for idx, expected_kind in enumerate(task.expected_evidence):
-            evidence_id = f"evidence-{run_id}-{task_id}-{expected_kind}-{evidence_counter:03d}-{idx:03d}"
+            evidence_id = (
+                f"evidence-{run_id}-{task_id}-exec-{evidence_counter:03d}-{idx:03d}"
+            )
             evidence_record = EvidenceRecord(
                 evidence_id=evidence_id,
                 run_id=run_id,
@@ -301,14 +313,24 @@ async def verify_task_execution_activity(
     actual_kinds = set(e.kind for e in evidence_records)
 
     if not expected_kinds:
-        # If no expected evidence, we should have at least one fallback
-        checks.append(
-            {
-                "check_name": "Expected evidence kinds check",
-                "passed": True,
-                "message": "No expected evidence kinds (fallback used)",
-            }
-        )
+        # If no expected evidence, we MUST have at least one fallback with kind "executor_output"
+        has_executor_output = "executor_output" in actual_kinds
+        if has_executor_output and len(actual_kinds) >= 1:
+            checks.append(
+                {
+                    "check_name": "Expected evidence kinds check",
+                    "passed": True,
+                    "message": "No expected evidence kinds - fallback executor_output evidence present",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "check_name": "Expected evidence kinds check",
+                    "passed": False,
+                    "message": f"No expected evidence kinds but no executor_output fallback found. Actual kinds: {sorted(actual_kinds)}",
+                }
+            )
     else:
         # All expected kinds must be present
         missing_kinds = expected_kinds - actual_kinds
@@ -328,6 +350,49 @@ async def verify_task_execution_activity(
                     "message": f"Missing expected evidence kinds: {sorted(missing_kinds)}",
                 }
             )
+
+    # Check 5: Verify against task.verification.expected
+    # For M3 stub, the ExecutorOutput.result should contain the expected value
+    verification_expected = task.verification.expected if task.verification else None
+    if verification_expected:
+        # Check if any evidence payload contains the expected value
+        expected_found = False
+        for evidence in evidence_records:
+            payload = evidence.payload
+            if isinstance(payload, dict):
+                # Check in executor_output.result
+                executor_output_data = payload.get("executor_output", {})
+                if isinstance(executor_output_data, dict):
+                    result = executor_output_data.get("result", "")
+                    if verification_expected in result:
+                        expected_found = True
+                        break
+
+        if expected_found:
+            checks.append(
+                {
+                    "check_name": "VerificationSpec expected value present",
+                    "passed": True,
+                    "message": f"Expected value '{verification_expected}' found in evidence",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "check_name": "VerificationSpec expected value present",
+                    "passed": False,
+                    "message": f"Expected value '{verification_expected}' NOT found in evidence",
+                }
+            )
+    else:
+        # No expected value to check
+        checks.append(
+            {
+                "check_name": "VerificationSpec expected value check",
+                "passed": True,
+                "message": "No verification expected value specified",
+            }
+        )
 
     # Determine overall status
     all_passed = all(c["passed"] for c in checks)
@@ -396,19 +461,26 @@ async def prepare_task_activity(
     # Update state
     state.active_task_id = task.task_id
     if state.status != RunStatus.RUNNING:
-        # This should already be RUNNING from M2, but ensure it
-        state.status = RunStatus.RUNNING
-    state.touch()
+        # Use transition API if needed
+        from fsasm.transitions import transition_run
+
+        state = transition_run(state, RunStatus.RUNNING)
+    else:
+        state.touch()
 
     # Update plan in state to reflect task status change
+    # Replace the task object in the plan rather than just assigning status
     if state.plan is not None:
-        for plan_task in state.plan.tasks:
+        plan = state.plan
+        updated_tasks = []
+        for plan_task in plan.tasks:
             if plan_task.task_id == task.task_id:
-                plan_task.status = TaskStatus.RUNNING
+                # Replace with the transitioned task
+                updated_tasks.append(task)
             else:
-                # Ensure other tasks remain PENDING (or their current status)
-                if plan_task.status == TaskStatus.PENDING:
-                    pass  # Keep as PENDING
+                # Keep other tasks as-is
+                updated_tasks.append(plan_task)
+        plan.tasks = updated_tasks
 
     # Persist state
     persistence.save_run_state(state)
@@ -478,9 +550,11 @@ async def finalize_task_activity(
 
     # Update plan in state to reflect task status change
     if state.plan is not None:
-        for plan_task in state.plan.tasks:
+        plan = state.plan
+        for plan_task in plan.tasks:
             if plan_task.task_id == task.task_id:
                 plan_task.status = task.status
+            # Other tasks remain in their current status (should be PENDING)
 
     # Persist evidence records
     for evidence in evidence_records:

@@ -155,25 +155,37 @@ async def validate_config_activity(
     name="fsasm-find-first-ready-task",
     retry_policy_max_attempts=1,
 )
-async def find_first_ready_task_activity(plan: Plan) -> ChildTask:
+async def find_first_ready_task_activity(
+    plan: Plan, completed_task_ids: list[str]
+) -> ChildTask:
     """
     Find the first READY task in the plan.
 
     For M3, we execute exactly ONE eligible task.
-    Eligible means PENDING or READY status.
+    Eligible means:
+    - PENDING or READY status
+    - All dependencies are in completed_task_ids (satisfied)
     We select the first one by sequence order.
 
     Args:
         plan: The Plan with tasks.
+        completed_task_ids: List of task IDs that have been completed.
 
     Returns:
-        The first READY or PENDING task (transitioned to READY).
+        The first eligible task (transitioned to READY).
     """
     from fsasm.transitions import transition_task
 
-    # Find first task that is PENDING (eligible for execution)
+    # Find first task that is PENDING/READY and has all dependencies satisfied
     for task in sorted(plan.tasks, key=lambda t: t.sequence):
         if task.status in [TaskStatus.PENDING, TaskStatus.READY]:
+            # Check if all dependencies are completed
+            all_deps_satisfied = all(
+                dep in completed_task_ids for dep in task.dependencies
+            )
+            if not all_deps_satisfied:
+                continue  # Skip tasks with unmet dependencies
+
             # Transition PENDING -> READY if needed
             if task.status == TaskStatus.PENDING:
                 task = transition_task(task, TaskStatus.READY)
@@ -185,7 +197,7 @@ async def find_first_ready_task_activity(plan: Plan) -> ChildTask:
 
 @workflows.activity(
     name="fsasm-persist-m3-initial-state",
-    retry_policy_max_attempts=3,
+    retry_policy_max_attempts=1,
 )
 async def persist_initial_state_activity(
     planner_output: PlannerOutput,
@@ -257,7 +269,7 @@ async def persist_initial_state_activity(
 
 @workflows.activity(
     name="fsasm-persist-m3-final-state",
-    retry_policy_max_attempts=3,
+    retry_policy_max_attempts=1,
 )
 async def persist_final_m3_state_activity(
     state: RunState,
@@ -398,10 +410,13 @@ class FsasmMilestoneThreeWorkflow:
         plan, state = await persist_initial_state_activity(planner_output, goal_input)
 
         # Step 5: Find first eligible task (PENDING -> READY)
-        task = await find_first_ready_task_activity(plan)
+        task = await find_first_ready_task_activity(plan, state.completed_task_ids)
 
         # Step 6: Prepare task (READY -> RUNNING, set active_task_id, persist)
         state, task = await prepare_task_activity(state, task)
+
+        # Update plan reference to use state.plan (authoritative after prepare)
+        plan = state.plan if state.plan is not None else plan
 
         # Remember the executed task ID for final output
         executed_task_id = task.task_id
@@ -432,6 +447,9 @@ class FsasmMilestoneThreeWorkflow:
         state, task = await finalize_task_activity(
             state, task, verification_result, task_evidence_records
         )
+
+        # Update plan reference to use state.plan (authoritative after finalize)
+        plan = state.plan if state.plan is not None else plan
 
         # Step 12: Collect all evidence and persist final state
         # For M3, we have: proposal evidence + task evidence
