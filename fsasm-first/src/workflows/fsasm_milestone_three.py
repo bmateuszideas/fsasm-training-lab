@@ -51,8 +51,8 @@ class WorkflowInput(BaseModel):
     goal: str
     run_id: str | None = None
     planner_backend: PlannerBackend = Field(
-        default=PlannerBackend.STUB,
-        description="Backend to use for planning: 'stub' or 'mistral'.",
+        ...,
+        description="Backend to use for planning: 'stub' or 'mistral'. Must be explicitly provided.",
     )
     planner_model_name: str | None = Field(
         default=None,
@@ -62,8 +62,8 @@ class WorkflowInput(BaseModel):
         default="v1.0", description="Prompt template version."
     )
     executor_backend: ExecutorBackend = Field(
-        default=ExecutorBackend.STUB,
-        description="Backend to use for execution: 'stub' only for M3.",
+        ...,
+        description="Backend to use for execution: 'stub' only for M3. Must be explicitly provided.",
     )
     executor_model_name: str | None = Field(
         default=None,
@@ -312,9 +312,6 @@ async def persist_final_m3_state_activity(
     )
     persistence.save_evidence(execution_evidence)
     all_evidence_records.append(execution_evidence)
-
-    # Save verification result to log
-    persistence.save_verification_result(verification_result)
 
     # Save final state
     state.touch()

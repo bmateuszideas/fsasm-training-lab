@@ -10,15 +10,25 @@ from fsasm.models import (
     TaskStatus,
 )
 from fsasm.persistence import RuntimePersistence
+from pydantic import ValidationError
 from src.workflows import fsasm_milestone_three
 
 
 class TestWorkflowInput:
     """Tests for WorkflowInput model."""
 
-    def test_minimal_input(self):
-        """Test minimal workflow input."""
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+    def test_minimal_input_requires_backends(self):
+        """Test that minimal workflow input requires explicit backends."""
+        with pytest.raises(ValidationError):
+            fsasm_milestone_three.WorkflowInput(goal="Test goal")
+
+    def test_input_with_explicit_backends(self):
+        """Test workflow input with explicit backends."""
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
         assert input.goal == "Test goal"
         assert input.run_id is None
         assert input.planner_backend == PlannerBackend.STUB
@@ -110,7 +120,11 @@ class TestWorkflowExecution:
     async def test_workflow_creates_run_id(self):
         """Test that workflow creates a run_id when not provided."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -125,7 +139,10 @@ class TestWorkflowExecution:
         """Test that workflow uses provided run_id."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
         input = fsasm_milestone_three.WorkflowInput(
-            goal="Test goal", run_id="my-custom-run-id"
+            goal="Test goal",
+            run_id="my-custom-run-id",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
         )
 
         result = await wf.run(input)
@@ -136,7 +153,11 @@ class TestWorkflowExecution:
     async def test_workflow_creates_plan_with_3_tasks(self):
         """Test that workflow creates a plan with exactly 3 tasks."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -146,7 +167,11 @@ class TestWorkflowExecution:
     async def test_workflow_executes_one_task(self):
         """Test that workflow executes exactly one task."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -158,7 +183,11 @@ class TestWorkflowExecution:
     async def test_workflow_returns_stub_metadata(self):
         """Test that workflow returns stub executor metadata."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -171,7 +200,11 @@ class TestWorkflowExecution:
     async def test_workflow_status_remains_running(self):
         """Test that run status remains RUNNING after M3 execution."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -181,7 +214,11 @@ class TestWorkflowExecution:
     async def test_workflow_persists_state(self):
         """Test that workflow persists state to filesystem."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -196,7 +233,11 @@ class TestWorkflowExecution:
     async def test_workflow_persists_plan(self):
         """Test that workflow persists plan to filesystem."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -211,7 +252,11 @@ class TestWorkflowExecution:
     async def test_workflow_persists_evidence(self):
         """Test that workflow persists evidence to filesystem."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -225,7 +270,11 @@ class TestWorkflowExecution:
     async def test_workflow_verification_result(self):
         """Test that workflow returns verification result."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(goal="Test goal")
+        input = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
 
         result = await wf.run(input)
 
@@ -237,7 +286,10 @@ class TestWorkflowExecution:
         """Test that workflow execution is deterministic."""
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
         input = fsasm_milestone_three.WorkflowInput(
-            goal="Test goal", run_id="deterministic-run"
+            goal="Test goal",
+            run_id="deterministic-run",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
         )
 
         result1 = await wf.run(input)
@@ -254,6 +306,7 @@ class TestWorkflowExecution:
         input = fsasm_milestone_three.WorkflowInput(
             goal="Test goal",
             planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
         )
 
         result = await wf.run(input)
@@ -265,6 +318,7 @@ class TestWorkflowExecution:
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
         input = fsasm_milestone_three.WorkflowInput(
             goal="Test goal",
+            planner_backend=PlannerBackend.STUB,
             executor_backend=ExecutorBackend.MISTRAL,
         )
         from fsasm.errors import ConfigurationError
@@ -323,6 +377,7 @@ class TestWorkflowLevelExecution:
                 "fsasm-milestone-three",
                 {
                     "goal": "Test workflow level execution M3",
+                    "planner_backend": "stub",
                     "executor_backend": "stub",
                 },
                 id="test-fsasm-m3-workflow-level",
@@ -393,3 +448,9 @@ class TestWorkflowLevelExecution:
                 assert task.status == TaskStatus.PENDING, (
                     f"Task {task.task_id} should be PENDING in plan.json but is {task.status}"
                 )
+
+            # Verify the real M3 requirements
+            assert result["executed_task_status"] == "PASSED"
+            assert result["verification_status"] == "PASS"
+            assert result["success"] is True
+            assert result["status"] == "RUNNING"

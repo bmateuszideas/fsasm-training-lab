@@ -9,4 +9,4 @@ build/
 .ruff_cache/
 
 # FS-ASM runtime data
-runtime/
+**/runtime/

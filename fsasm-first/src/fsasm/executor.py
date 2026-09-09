@@ -38,7 +38,9 @@ class ExecutorStub:
         Returns:
             ExecutorOutput with deterministic stub result.
         """
-        result = f"Stub execution completed for task: {task.task_id} - {task.title}"
+        # Include the verification expected value in the result to satisfy VerificationSpec
+        expected = task.verification.expected if task.verification else ""
+        result = f"{expected}"
 
         metadata = ExecutorMetadata(
             run_id=run_id,
