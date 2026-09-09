@@ -17,7 +17,6 @@ with workflows.workflow.unsafe.imports_passed_through():
         RunState,
         RunStatus,
         TaskStatus,
-        VerificationCheck,
         VerificationResult,
         VerificationResultStatus,
     )
@@ -226,6 +225,8 @@ async def verify_task_execution_activity(
     """
     Verify task execution using deterministic checks.
 
+    Thin wrapper around domain verifier.VerificationSpec.expected check.
+
     Verification operates on:
     - authoritative run_id
     - ChildTask
@@ -245,184 +246,10 @@ async def verify_task_execution_activity(
     Returns:
         VerificationResult with PASS or FAIL.
     """
+    from fsasm.verifier import DeterministicVerifier
 
-    checks: list = []
-
-    # Check 1: Evidence records are not empty
-    if len(evidence_records) > 0:
-        checks.append(
-            {
-                "check_name": "Evidence records exist",
-                "passed": True,
-                "message": f"Found {len(evidence_records)} evidence records",
-            }
-        )
-    else:
-        checks.append(
-            {
-                "check_name": "Evidence records exist",
-                "passed": False,
-                "message": "No evidence records provided",
-            }
-        )
-
-    # Check 2: All evidence has correct run_id
-    all_run_ids_correct = True
-    for evidence in evidence_records:
-        if evidence.run_id != run_id:
-            all_run_ids_correct = False
-            checks.append(
-                {
-                    "check_name": f"Evidence {evidence.evidence_id} run_id match",
-                    "passed": False,
-                    "message": f"Evidence run_id '{evidence.run_id}' != authoritative run_id '{run_id}'",
-                }
-            )
-    if all_run_ids_correct:
-        checks.append(
-            {
-                "check_name": "All evidence run_ids match authoritative run_id",
-                "passed": True,
-                "message": f"All {len(evidence_records)} evidence records have run_id '{run_id}'",
-            }
-        )
-
-    # Check 3: All evidence has correct task_id
-    all_task_ids_correct = True
-    for evidence in evidence_records:
-        if evidence.task_id != task.task_id:
-            all_task_ids_correct = False
-            checks.append(
-                {
-                    "check_name": f"Evidence {evidence.evidence_id} task_id match",
-                    "passed": False,
-                    "message": f"Evidence task_id '{evidence.task_id}' != task task_id '{task.task_id}'",
-                }
-            )
-    if all_task_ids_correct:
-        checks.append(
-            {
-                "check_name": "All evidence task_ids match task",
-                "passed": True,
-                "message": f"All {len(evidence_records)} evidence records have task_id '{task.task_id}'",
-            }
-        )
-
-    # Check 4: All expected evidence kinds are present
-    expected_kinds = set(task.expected_evidence) if task.expected_evidence else set()
-    actual_kinds = set(e.kind for e in evidence_records)
-
-    if not expected_kinds:
-        # If no expected evidence, we MUST have at least one fallback with kind "executor_output"
-        has_executor_output = "executor_output" in actual_kinds
-        if has_executor_output and len(actual_kinds) >= 1:
-            checks.append(
-                {
-                    "check_name": "Expected evidence kinds check",
-                    "passed": True,
-                    "message": "No expected evidence kinds - fallback executor_output evidence present",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "check_name": "Expected evidence kinds check",
-                    "passed": False,
-                    "message": f"No expected evidence kinds but no executor_output fallback found. Actual kinds: {sorted(actual_kinds)}",
-                }
-            )
-    else:
-        # All expected kinds must be present
-        missing_kinds = expected_kinds - actual_kinds
-        if not missing_kinds:
-            checks.append(
-                {
-                    "check_name": "All expected evidence kinds present",
-                    "passed": True,
-                    "message": f"All {len(expected_kinds)} expected kinds present: {sorted(expected_kinds)}",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "check_name": "All expected evidence kinds present",
-                    "passed": False,
-                    "message": f"Missing expected evidence kinds: {sorted(missing_kinds)}",
-                }
-            )
-
-    # Check 5: Verify against task.verification.expected
-    # For M3 stub, the ExecutorOutput.result should contain the expected value
-    verification_expected = task.verification.expected if task.verification else None
-    if verification_expected:
-        # Check if any evidence payload contains the expected value
-        expected_found = False
-        for evidence in evidence_records:
-            payload = evidence.payload
-            if isinstance(payload, dict):
-                # Check in executor_output.result
-                executor_output_data = payload.get("executor_output", {})
-                if isinstance(executor_output_data, dict):
-                    result = executor_output_data.get("result", "")
-                    if verification_expected in result:
-                        expected_found = True
-                        break
-
-        if expected_found:
-            checks.append(
-                {
-                    "check_name": "VerificationSpec expected value present",
-                    "passed": True,
-                    "message": f"Expected value '{verification_expected}' found in evidence",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "check_name": "VerificationSpec expected value present",
-                    "passed": False,
-                    "message": f"Expected value '{verification_expected}' NOT found in evidence",
-                }
-            )
-    else:
-        # No expected value to check
-        checks.append(
-            {
-                "check_name": "VerificationSpec expected value check",
-                "passed": True,
-                "message": "No verification expected value specified",
-            }
-        )
-
-    # Determine overall status
-    all_passed = all(c["passed"] for c in checks)
-    status = (
-        VerificationResultStatus.PASS if all_passed else VerificationResultStatus.FAIL
-    )
-
-    message = (
-        "Task execution verification PASSED"
-        if all_passed
-        else "Task execution verification FAILED"
-    )
-
-    # Convert checks to VerificationCheck objects
-    verification_checks = [
-        VerificationCheck(
-            check_name=c["check_name"],
-            passed=c["passed"],
-            message=c["message"],
-        )
-        for c in checks
-    ]
-
-    return VerificationResult(
-        run_id=run_id,
-        task_id=task.task_id,
-        status=status,
-        checks=verification_checks,
-        message=message,
-    )
+    verifier = DeterministicVerifier()
+    return verifier.verify_task_execution(run_id, task, evidence_records)
 
 
 @activity(
@@ -455,18 +282,18 @@ async def prepare_task_activity(
     """
     persistence = RuntimePersistence()
 
+    # Transition run to RUNNING (from PLANNED) first
+    from fsasm.transitions import transition_run
+
+    if state.status == RunStatus.PLANNED:
+        state = transition_run(state, RunStatus.RUNNING)
+
     # Transition task to RUNNING
     task = transition_task(task, TaskStatus.RUNNING)
 
     # Update state
     state.active_task_id = task.task_id
-    if state.status != RunStatus.RUNNING:
-        # Use transition API if needed
-        from fsasm.transitions import transition_run
-
-        state = transition_run(state, RunStatus.RUNNING)
-    else:
-        state.touch()
+    state.touch()
 
     # Update plan in state to reflect task status change
     # Replace the task object in the plan rather than just assigning status

@@ -206,11 +206,9 @@ async def persist_initial_state_activity(
     """
     Persist the plan, planner proposal (as evidence), and initial run state to filesystem.
 
-    Creates initial RunState with PLANNED status (from M2).
-    Then transitions to RUNNING for M3 execution.
+    Creates initial RunState with PLANNED status.
+    PLANNED -> RUNNING transition happens later in prepare_task_activity.
     """
-    from fsasm.transitions import transition_run
-
     persistence = RuntimePersistence()
 
     plan = planner_output.plan
@@ -227,9 +225,6 @@ async def persist_initial_state_activity(
         completed_task_ids=[],
         failed_task_ids=[],
     )
-
-    # Transition PLANNED -> RUNNING in activity
-    transition_run(state, RunStatus.RUNNING)
 
     # Save plan
     persistence.save_plan(plan)
@@ -258,7 +253,7 @@ async def persist_initial_state_activity(
             "event": "m3_run_started",
             "run_id": run_id,
             "goal": goal_input.goal,
-            "status": RunStatus.RUNNING.value,
+            "status": RunStatus.PLANNED.value,
             "planner_provider": metadata.provider,
             "timestamp": state.created_at,
         },
@@ -278,7 +273,7 @@ async def persist_final_m3_state_activity(
     verification_result: VerificationResult,
     all_evidence_records: list[EvidenceRecord],
     planner_metadata: PlannerMetadata,
-) -> RunState:
+) -> tuple[RunState, int]:
     """
     Persist the final M3 run state with execution results.
 
@@ -305,13 +300,13 @@ async def persist_final_m3_state_activity(
                 {"name": c.check_name, "passed": c.passed, "message": c.message}
                 for c in verification_result.checks
             ],
-            "total_evidence_count": len(all_evidence_records),
+            # total_evidence_count includes the summary evidence itself
+            "total_evidence_count": len(all_evidence_records) + 1,
             "planner_provider": planner_metadata.provider,
             "planner_model_call_count": planner_metadata.model_call_count,
         },
     )
     persistence.save_evidence(execution_evidence)
-    all_evidence_records.append(execution_evidence)
 
     # Save final state
     state.touch()
@@ -330,14 +325,15 @@ async def persist_final_m3_state_activity(
             "final_run_status": state.status.value,
             "verification_status": verification_result.status.value,
             "verification_message": verification_result.message,
-            "evidence_count": len(all_evidence_records),
+            "evidence_count": len(all_evidence_records) + 1,
             "planner_provider": planner_metadata.provider,
             "planner_model_call_count": planner_metadata.model_call_count,
             "timestamp": state.updated_at,
         },
     )
 
-    return state
+    # Return authoritative final evidence count
+    return state, len(all_evidence_records) + 1
 
 
 # =============================================================================
@@ -464,7 +460,7 @@ class FsasmMilestoneThreeWorkflow:
             )
         ] + task_evidence_records
 
-        final_state = await persist_final_m3_state_activity(
+        final_state, final_evidence_count = await persist_final_m3_state_activity(
             state,
             plan,
             executed_task_id,
@@ -484,7 +480,7 @@ class FsasmMilestoneThreeWorkflow:
             executed_task_status=task.status.value,
             verification_status=verification_result.status.value,
             verification_message=verification_result.message,
-            evidence_count=len(all_evidence_records),
+            evidence_count=final_evidence_count,
             created_at=final_state.created_at,
             updated_at=final_state.updated_at,
             success=verification_result.status == VerificationResultStatus.PASS,

@@ -404,6 +404,209 @@ class DeterministicVerifier:
             message=message,
         )
 
+    def verify_task_execution(
+        self,
+        run_id: str,
+        task: ChildTask,
+        evidence_records: list[EvidenceRecord],
+    ) -> VerificationResult:
+        """
+        Verify task execution using deterministic checks.
+
+        Pure domain verification moved from executor_activities.py.
+        Verification operates on:
+        - authoritative run_id
+        - ChildTask
+        - list[EvidenceRecord]
+
+        Evidence must match BOTH:
+        - evidence.run_id == authoritative run_id
+        - evidence.task_id == task.task_id
+
+        Verification requires ALL declared expected evidence kinds to be present.
+        Also verifies task.verification.expected is present in evidence.
+
+        Args:
+            run_id: The authoritative run_id.
+            task: The ChildTask being verified.
+            evidence_records: List of EvidenceRecord for this task.
+
+        Returns:
+            VerificationResult with PASS or FAIL.
+        """
+        checks: list[VerificationCheck] = []
+
+        # Check 1: Evidence records are not empty
+        if len(evidence_records) > 0:
+            checks.append(
+                VerificationCheck(
+                    check_name="Evidence records exist",
+                    passed=True,
+                    message=f"Found {len(evidence_records)} evidence records",
+                )
+            )
+        else:
+            checks.append(
+                VerificationCheck(
+                    check_name="Evidence records exist",
+                    passed=False,
+                    message="No evidence records provided",
+                )
+            )
+
+        # Check 2: All evidence has correct run_id
+        all_run_ids_correct = True
+        for evidence in evidence_records:
+            if evidence.run_id != run_id:
+                all_run_ids_correct = False
+                checks.append(
+                    VerificationCheck(
+                        check_name=f"Evidence {evidence.evidence_id} run_id match",
+                        passed=False,
+                        message=f"Evidence run_id '{evidence.run_id}' != authoritative run_id '{run_id}'",
+                    )
+                )
+        if all_run_ids_correct:
+            checks.append(
+                VerificationCheck(
+                    check_name="All evidence run_ids match authoritative run_id",
+                    passed=True,
+                    message=f"All {len(evidence_records)} evidence records have run_id '{run_id}'",
+                )
+            )
+
+        # Check 3: All evidence has correct task_id
+        all_task_ids_correct = True
+        for evidence in evidence_records:
+            if evidence.task_id != task.task_id:
+                all_task_ids_correct = False
+                checks.append(
+                    VerificationCheck(
+                        check_name=f"Evidence {evidence.evidence_id} task_id match",
+                        passed=False,
+                        message=f"Evidence task_id '{evidence.task_id}' != task task_id '{task.task_id}'",
+                    )
+                )
+        if all_task_ids_correct:
+            checks.append(
+                VerificationCheck(
+                    check_name="All evidence task_ids match task",
+                    passed=True,
+                    message=f"All {len(evidence_records)} evidence records have task_id '{task.task_id}'",
+                )
+            )
+
+        # Check 4: All expected evidence kinds are present
+        expected_kinds = (
+            set(task.expected_evidence) if task.expected_evidence else set()
+        )
+        actual_kinds = set(e.kind for e in evidence_records)
+
+        if not expected_kinds:
+            # If no expected evidence, we MUST have at least one fallback with kind "executor_output"
+            has_executor_output = "executor_output" in actual_kinds
+            if has_executor_output and len(actual_kinds) >= 1:
+                checks.append(
+                    VerificationCheck(
+                        check_name="Expected evidence kinds check",
+                        passed=True,
+                        message="No expected evidence kinds - fallback executor_output evidence present",
+                    )
+                )
+            else:
+                checks.append(
+                    VerificationCheck(
+                        check_name="Expected evidence kinds check",
+                        passed=False,
+                        message=f"No expected evidence kinds but no executor_output fallback found. Actual kinds: {sorted(actual_kinds)}",
+                    )
+                )
+        else:
+            # All expected kinds must be present
+            missing_kinds = expected_kinds - actual_kinds
+            if not missing_kinds:
+                checks.append(
+                    VerificationCheck(
+                        check_name="All expected evidence kinds present",
+                        passed=True,
+                        message=f"All {len(expected_kinds)} expected kinds present: {sorted(expected_kinds)}",
+                    )
+                )
+            else:
+                checks.append(
+                    VerificationCheck(
+                        check_name="All expected evidence kinds present",
+                        passed=False,
+                        message=f"Missing expected evidence kinds: {sorted(missing_kinds)}",
+                    )
+                )
+
+        # Check 5: Verify against task.verification.expected
+        verification_expected = (
+            task.verification.expected if task.verification else None
+        )
+        if verification_expected:
+            # Check if any evidence payload contains the expected value
+            expected_found = False
+            for evidence in evidence_records:
+                payload = evidence.payload
+                if isinstance(payload, dict):
+                    # Check in executor_output.result
+                    executor_output_data = payload.get("executor_output", {})
+                    if isinstance(executor_output_data, dict):
+                        result = executor_output_data.get("result", "")
+                        if verification_expected in result:
+                            expected_found = True
+                            break
+
+            if expected_found:
+                checks.append(
+                    VerificationCheck(
+                        check_name="VerificationSpec expected value present",
+                        passed=True,
+                        message=f"Expected value '{verification_expected}' found in evidence",
+                    )
+                )
+            else:
+                checks.append(
+                    VerificationCheck(
+                        check_name="VerificationSpec expected value present",
+                        passed=False,
+                        message=f"Expected value '{verification_expected}' NOT found in evidence",
+                    )
+                )
+        else:
+            # No expected value to check
+            checks.append(
+                VerificationCheck(
+                    check_name="VerificationSpec expected value check",
+                    passed=True,
+                    message="No verification expected value specified",
+                )
+            )
+
+        # Determine overall status
+        all_passed = all(c.passed for c in checks)
+        status = (
+            VerificationResultStatus.PASS
+            if all_passed
+            else VerificationResultStatus.FAIL
+        )
+
+        message = (
+            "Task execution verification PASSED"
+            if all_passed
+            else "Task execution verification FAILED"
+        )
+
+        return VerificationResult(
+            run_id=run_id,
+            task_id=task.task_id,
+            status=status,
+            checks=checks,
+            message=message,
+        )
+
 
 # Singleton instance for convenience
 verifier = DeterministicVerifier()
