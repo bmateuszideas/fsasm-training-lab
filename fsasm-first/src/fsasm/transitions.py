@@ -19,7 +19,7 @@ _TASK_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.NEEDS_HUMAN,
     },  # Can retry if budget remains, or escalate
     TaskStatus.BLOCKED: {TaskStatus.READY},  # Can become ready when unblocked
-    TaskStatus.NEEDS_HUMAN: set(),  # Terminal state - requires human intervention
+    TaskStatus.NEEDS_HUMAN: set(),  # Terminal state - human-authorized transitions handled separately
 }
 
 # Transitions that require verification PASS
@@ -73,6 +73,12 @@ def transition_task(
     """
     Transition a task to a new status, enforcing domain rules.
 
+    Attempt semantics:
+    - attempt counts actual execution attempts started
+    - increment on READY -> RUNNING (exactly once BEFORE Executor execution)
+    - FAILED -> READY does NOT increment
+    - never increment attempt manually in workflow code
+
     Args:
         task: The ChildTask to transition.
         target_status: The desired new status.
@@ -99,6 +105,11 @@ def transition_task(
             reason=f"{current_status.value} cannot transition to {target_status.value}",
         )
 
+    # Increment attempt counter on READY -> RUNNING (actual execution attempt started)
+    # This is the ONLY place where attempt is incremented
+    if current_status == TaskStatus.READY and target_status == TaskStatus.RUNNING:
+        task.attempt += 1
+
     # Check verification requirements
     if (current_status, target_status) in _TASK_REQUIRES_VERIFICATION_PASS:
         if verification_pass is not True and verification_result is not True:
@@ -120,7 +131,7 @@ def transition_task(
                 reason="Transition to FAILED requires verification FAIL",
             )
 
-    # Check retry budget
+    # Check retry budget for FAILED -> READY or FAILED -> NEEDS_HUMAN
     if (current_status, target_status) in _TASK_REQUIRES_RETRY_CHECK:
         if target_status == TaskStatus.NEEDS_HUMAN:
             # FAILED -> NEEDS_HUMAN: only allowed if retry budget is exhausted
@@ -141,12 +152,7 @@ def transition_task(
                     max_attempts=task.max_attempts,
                     current_attempt=task.attempt,
                 )
-            # Increment attempt counter when retrying
-            if (
-                target_status == TaskStatus.READY
-                and current_status == TaskStatus.FAILED
-            ):
-                task.attempt += 1
+            # Do NOT increment attempt here - it was already incremented on READY->RUNNING
 
     # Perform the transition
     task.status = target_status

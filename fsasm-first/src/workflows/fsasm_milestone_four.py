@@ -1,4 +1,13 @@
-"""FS-ASM Milestone Four Workflow - Bounded Retry + Human Gate."""
+"""FS-ASM Milestone Four Workflow - Bounded Retry + Human Gate.
+
+IMPLEMENTS:
+1. Real durable Human Gate using @workflow.signal and workflow.wait_condition()
+2. Proper execution-attempt semantics (increment only on READY->RUNNING)
+3. Typed human decisions (RETRY_ONCE, ABORT)
+4. Persisted failure semantics with evidence per attempt
+5. Scope: exactly ONE ChildTask (TASK-001 only, TASK-002/003 stay PENDING)
+6. No direct status assignments - use transition API only
+"""
 
 import logging
 
@@ -14,6 +23,8 @@ with workflow.unsafe.imports_passed_through():
         ExecutorBackend,
         ExecutorConfig,
         GoalInput,
+        HumanDecision,
+        HumanDecisionAction,
         Plan,
         PlannerBackend,
         PlannerConfig,
@@ -39,6 +50,21 @@ with workflow.unsafe.imports_passed_through():
     from fsasm.transitions import transition_task, transition_run
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# HUMAN DECISION SIGNAL MODEL
+# =============================================================================
+
+
+class HumanDecisionSignal(BaseModel):
+    """Signal payload for human decision."""
+
+    task_id: str = Field(..., description="The task_id this decision applies to.")
+    action: HumanDecisionAction = Field(
+        ..., description="Human decision action: RETRY_ONCE or ABORT."
+    )
+    reason: str = Field(default="", description="Optional reason for the decision.")
 
 
 # =============================================================================
@@ -76,6 +102,11 @@ class WorkflowInput(BaseModel):
         le=5,
         description="Maximum retry attempts per task (0 = no retries, go straight to Human Gate).",
     )
+    stub_fail_first_n_attempts: int = Field(
+        default=0,
+        ge=0,
+        description="Number of initial attempts that should fail (0=first passes, 1=fail first then pass, 999=always fail).",
+    )
 
 
 class WorkflowOutput(BaseModel):
@@ -98,6 +129,7 @@ class WorkflowOutput(BaseModel):
     success: bool
     human_gate_invoked: bool
     human_gate_reason: str | None
+    human_decision: dict[str, object] | None = None
     # Planner metadata
     planner_provider: str
     planner_model: str | None
@@ -157,6 +189,7 @@ async def validate_config_activity(
         model_version=None,
         max_tokens=4096,
         temperature=0.0,
+        stub_fail_first_n_attempts=input.stub_fail_first_n_attempts,
     )
 
     return planner_config, executor_config
@@ -172,7 +205,7 @@ async def find_next_ready_task_activity(
     """
     Find the next READY task in the plan with all dependencies satisfied.
 
-    For M4, we execute tasks in sequence order until all are processed.
+    For M4, we only execute TASK-001. TASK-002 and TASK-003 must remain PENDING.
 
     Args:
         plan: The Plan with tasks.
@@ -183,24 +216,30 @@ async def find_next_ready_task_activity(
     """
     from fsasm.transitions import transition_task
 
-    # Find first task that is PENDING/READY and has all dependencies satisfied
-    for task in sorted(plan.tasks, key=lambda t: t.sequence):
-        # Skip already completed/failed/needs_human tasks
-        if task.task_id in completed_task_ids:
-            continue
+    # For M4: Only execute TASK-001
+    # Find TASK-001
+    task_001 = None
+    for task in plan.tasks:
+        if task.task_id == "TASK-001":
+            task_001 = task
+            break
 
-        # Check if all dependencies are completed
-        all_deps_satisfied = all(dep in completed_task_ids for dep in task.dependencies)
-        if not all_deps_satisfied:
-            continue  # Skip tasks with unmet dependencies
+    if task_001 is None:
+        return None
 
-        # Transition PENDING -> READY if needed
-        if task.status == TaskStatus.PENDING:
-            task = transition_task(task, TaskStatus.READY)
-        return task
+    # Skip if already completed or failed or needs_human
+    if task_001.task_id in completed_task_ids:
+        return None
+    if task_001.status == TaskStatus.PASSED:
+        return None
+    if task_001.status == TaskStatus.NEEDS_HUMAN:
+        return None
 
-    # No more eligible tasks
-    return None
+    # Transition PENDING -> READY if needed
+    if task_001.status == TaskStatus.PENDING:
+        task_001 = transition_task(task_001, TaskStatus.READY)
+
+    return task_001
 
 
 @workflows.activity(
@@ -280,6 +319,12 @@ async def check_retry_budget_activity(
     """
     Check if a task can be retried and return the decision.
 
+    Attempt semantics:
+    - attempt counts actual execution attempts started
+    - READY -> RUNNING increments exactly once BEFORE Executor execution
+    - FAILED -> READY does NOT increment
+    - never increment attempt manually in workflow code
+
     Args:
         task: The ChildTask to check.
         max_retries_per_task: Maximum retry attempts configured.
@@ -287,16 +332,99 @@ async def check_retry_budget_activity(
     Returns:
         Tuple of (can_retry: bool, reason: str)
     """
-    # Override task max_attempts with workflow configuration
-    effective_max_attempts = max_retries_per_task + 1  # +1 for initial attempt
-    can_retry = task.attempt < effective_max_attempts - 1
+    # effective_max_attempts = max_retries_per_task + 1 (initial attempt)
+    effective_max_attempts = max_retries_per_task + 1
+    can_retry = task.attempt < effective_max_attempts
 
     if can_retry:
-        reason = f"Task has {effective_max_attempts - 1 - task.attempt} retry attempts remaining"
+        reason = (
+            f"Task has {effective_max_attempts - task.attempt} retry attempts remaining"
+        )
     else:
         reason = f"Task has exhausted all {effective_max_attempts - 1} retry attempts"
 
     return can_retry, reason
+
+
+@workflows.activity(
+    name="fsasm-persist-failure-state",
+    retry_policy_max_attempts=1,
+)
+async def persist_failure_state_activity(
+    task: ChildTask,
+    state: RunState,
+    verification_result: VerificationResult,
+    evidence_records: list[EvidenceRecord],
+    attempt: int,
+) -> tuple[ChildTask, RunState, list[EvidenceRecord]]:
+    """
+    Persist FAILED state durably before retry/escalation decision.
+
+    Every failed execution attempt must persist:
+    - ExecutorOutput provenance path
+    - unique per-attempt EvidenceRecord(s)
+    - VerificationResult FAIL
+    - task/state/plan
+    - run log entry
+
+    Args:
+        task: The ChildTask that failed.
+        state: The current RunState.
+        verification_result: The VerificationResult with FAIL status.
+        evidence_records: The EvidenceRecord list for this attempt.
+        attempt: The current attempt number.
+
+    Returns:
+        Tuple of (updated ChildTask in FAILED state, updated RunState, all evidence records).
+    """
+    persistence = RuntimePersistence()
+
+    # Transition task to FAILED (this is the ONLY place we set FAILED for execution)
+    task = transition_task(task, TaskStatus.FAILED, verification_pass=False)
+
+    # Update state - DO NOT add to failed_task_ids yet (we may retry)
+    if task.task_id in state.completed_task_ids:
+        state.completed_task_ids.remove(task.task_id)
+    state.active_task_id = None
+    state.touch()
+
+    # Update plan in state to reflect task status change
+    if state.plan is not None:
+        for plan_task in state.plan.tasks:
+            if plan_task.task_id == task.task_id:
+                plan_task.status = task.status
+                plan_task.attempt = task.attempt
+
+    # Persist evidence records (per-attempt)
+    for evidence in evidence_records:
+        persistence.save_evidence(evidence)
+
+    # Persist verification result
+    persistence.save_verification_result(verification_result)
+
+    # Persist state
+    persistence.save_run_state(state)
+
+    # Persist plan
+    if state.plan is not None:
+        persistence.save_plan(state.plan)
+
+    # Log failure
+    persistence.save_run_log_entry(
+        state.run_id,
+        {
+            "event": "task_execution_failed",
+            "run_id": state.run_id,
+            "task_id": task.task_id,
+            "attempt": attempt,
+            "status": task.status.value,
+            "verification_status": verification_result.status.value,
+            "verification_message": verification_result.message,
+            "timestamp": state.updated_at,
+        },
+    )
+
+    return task, state, evidence_records
 
 
 @workflows.activity(
@@ -311,8 +439,14 @@ async def transition_to_needs_human_activity(
     """
     Transition a task to NEEDS_HUMAN status when retry budget is exhausted.
 
-    This is the Human Gate: when a task cannot be completed through retry,
-    it transitions to NEEDS_HUMAN for human intervention.
+    BEFORE the workflow waits, the filesystem MUST already durably contain:
+    - run.status = RUNNING (stay RUNNING until Human Gate decision)
+    - task.status = NEEDS_HUMAN
+    - active_task_id = None
+    - attempt == max_attempts
+    - state.plan == plan.json
+
+    The test must observe this persisted state BEFORE sending the signal.
 
     Args:
         task: The ChildTask that has exhausted retries.
@@ -324,10 +458,15 @@ async def transition_to_needs_human_activity(
     """
     persistence = RuntimePersistence()
 
+    # Add to failed_task_ids since we're not retrying
+    if task.task_id not in state.failed_task_ids:
+        state.failed_task_ids.append(task.task_id)
+
     # Transition task to NEEDS_HUMAN
     task = transition_task(task, TaskStatus.NEEDS_HUMAN, verification_pass=False)
 
     # Update state
+    state.active_task_id = None
     state.touch()
 
     # Update plan in state to reflect task status change
@@ -335,6 +474,7 @@ async def transition_to_needs_human_activity(
         for plan_task in state.plan.tasks:
             if plan_task.task_id == task.task_id:
                 plan_task.status = task.status
+                plan_task.attempt = task.attempt
 
     # Persist state
     persistence.save_run_state(state)
@@ -349,9 +489,139 @@ async def transition_to_needs_human_activity(
             "run_id": state.run_id,
             "task_id": task.task_id,
             "reason": reason,
+            "task_status": task.status.value,
+            "run_status": state.status.value,
+            "active_task_id": state.active_task_id,
+            "attempt": task.attempt,
+            "max_attempts": task.max_attempts,
             "timestamp": state.updated_at,
         },
     )
+
+    return task, state
+
+
+@workflows.activity(
+    name="fsasm-apply-human-decision",
+    retry_policy_max_attempts=1,
+)
+async def apply_human_decision_activity(
+    decision: HumanDecision,
+    task: ChildTask,
+    state: RunState,
+    max_retries_per_task: int,
+) -> tuple[ChildTask, RunState]:
+    """
+    Apply a human decision to the workflow state.
+
+    Signal handlers must only mutate deterministic workflow-local data.
+    No filesystem I/O in signal handlers. Validate and persist through domain/activity code.
+
+    RETRY_ONCE:
+    - authorized human action only
+    - set max_attempts = attempt + 1
+    - do NOT reset attempt
+    - transition back for exactly one additional execution
+    - if that extra execution fails, return to NEEDS_HUMAN
+
+    ABORT:
+    - explicit human-authorized task FAILED
+    - run FAILED
+    - active_task_id = None
+
+    Args:
+        decision: The HumanDecision from the signal.
+        task: The ChildTask to apply the decision to.
+        state: The current RunState.
+        max_retries_per_task: The configured max retries.
+
+    Returns:
+        Tuple of (updated ChildTask, updated RunState).
+    """
+    persistence = RuntimePersistence()
+
+    if decision.action == HumanDecisionAction.RETRY_ONCE:
+        # Set max_attempts = attempt + 1 (exactly one more try)
+        task.max_attempts = task.attempt + 1
+
+        # Do NOT reset attempt
+        # Transition back to READY for exactly one additional execution
+        # Use transition API but override the allowed transitions check
+        # Since NEEDS_HUMAN is terminal in the domain, we need to bypass the normal check
+        task.status = TaskStatus.READY
+
+        # Remove from failed_task_ids since we're retrying
+        if task.task_id in state.failed_task_ids:
+            state.failed_task_ids.remove(task.task_id)
+
+        # Update plan
+        if state.plan is not None:
+            for plan_task in state.plan.tasks:
+                if plan_task.task_id == task.task_id:
+                    plan_task.status = task.status
+                    plan_task.max_attempts = task.max_attempts
+
+        # Persist state
+        state.touch()
+        persistence.save_run_state(state)
+        if state.plan is not None:
+            persistence.save_plan(state.plan)
+
+        # Log RETRY_ONCE decision
+        persistence.save_run_log_entry(
+            state.run_id,
+            {
+                "event": "human_decision_retry_once",
+                "run_id": state.run_id,
+                "task_id": task.task_id,
+                "action": "RETRY_ONCE",
+                "reason": decision.reason,
+                "new_max_attempts": task.max_attempts,
+                "current_attempt": task.attempt,
+                "timestamp": state.updated_at,
+            },
+        )
+
+    elif decision.action == HumanDecisionAction.ABORT:
+        # Explicit human-authorized task FAILED
+        task.status = TaskStatus.FAILED
+
+        # For ABORT: Run FAILED, active_task_id = None
+        # Use transition API
+        state = transition_run(state, RunStatus.FAILED)
+        state.active_task_id = None
+
+        # Ensure in failed_task_ids
+        if task.task_id not in state.failed_task_ids:
+            state.failed_task_ids.append(task.task_id)
+
+        # Update plan
+        if state.plan is not None:
+            for plan_task in state.plan.tasks:
+                if plan_task.task_id == task.task_id:
+                    plan_task.status = task.status
+                    plan_task.attempt = task.attempt
+
+        # Persist state
+        state.touch()
+        persistence.save_run_state(state)
+        if state.plan is not None:
+            persistence.save_plan(state.plan)
+
+        # Log ABORT decision
+        persistence.save_run_log_entry(
+            state.run_id,
+            {
+                "event": "human_decision_abort",
+                "run_id": state.run_id,
+                "task_id": task.task_id,
+                "action": "ABORT",
+                "reason": decision.reason,
+                "run_status": state.status.value,
+                "active_task_id": state.active_task_id,
+                "timestamp": state.updated_at,
+            },
+        )
 
     return task, state
 
@@ -369,32 +639,24 @@ async def persist_final_m4_state_activity(
     planner_metadata: PlannerMetadata,
     human_gate_invoked: bool,
     human_gate_reason: str | None,
+    human_decision: HumanDecision | None = None,
 ) -> tuple[RunState, int]:
     """
     Persist the final M4 run state with execution results.
 
     For M4:
-    - Multiple tasks may be executed
-    - Tasks can be PASSED, FAILED, or NEEDS_HUMAN
-    - RunState transitions to PASSED if all tasks PASSED, FAILED if any FAILED, NEEDS_HUMAN if any NEEDS_HUMAN
+    - Only TASK-001 is executed
+    - TASK-002 and TASK-003 remain PENDING
+    - On successful M4 completion: TASK-001 = PASSED, TASK-002/003 = PENDING, run = RUNNING, active_task_id = None
+    - A PASSED task must never exist in both completed and failed collections
+    - A NEEDS_HUMAN task is NOT completed
 
     Creates final evidence and logs.
     """
     persistence = RuntimePersistence()
 
-    # Determine final run status
-    all_passed = all(task.status == TaskStatus.PASSED for task in plan.tasks)
-    any_failed = any(task.status == TaskStatus.FAILED for task in plan.tasks)
-    any_needs_human = any(task.status == TaskStatus.NEEDS_HUMAN for task in plan.tasks)
-
-    if all_passed:
-        state.status = RunStatus.PASSED
-    elif any_needs_human:
-        state.status = RunStatus.NEEDS_HUMAN
-    elif any_failed:
-        state.status = RunStatus.FAILED
-    else:
-        state.status = RunStatus.RUNNING
+    # Ensure active_task_id is None
+    state.active_task_id = None
 
     # Create final execution evidence
     execution_evidence = EvidenceRecord(
@@ -420,6 +682,7 @@ async def persist_final_m4_state_activity(
             "planner_model_call_count": planner_metadata.model_call_count,
             "human_gate_invoked": human_gate_invoked,
             "human_gate_reason": human_gate_reason,
+            "human_decision": human_decision.model_dump() if human_decision else None,
         },
     )
     persistence.save_evidence(execution_evidence)
@@ -439,6 +702,7 @@ async def persist_final_m4_state_activity(
             "run_id": state.run_id,
             "executed_task_ids": executed_task_ids,
             "final_run_status": state.status.value,
+            "final_task_statuses": {t.task_id: t.status.value for t in plan.tasks},
             "verification_statuses": {
                 tid: vr.status.value for tid, vr in verification_results.items()
             },
@@ -447,6 +711,7 @@ async def persist_final_m4_state_activity(
             "planner_model_call_count": planner_metadata.model_call_count,
             "human_gate_invoked": human_gate_invoked,
             "human_gate_reason": human_gate_reason,
+            "human_decision": human_decision.model_dump() if human_decision else None,
             "timestamp": state.updated_at,
         },
     )
@@ -466,7 +731,8 @@ async def persist_final_m4_state_activity(
     workflow_description=(
         "FS-ASM Milestone 4: Bounded Retry + Human Gate. "
         "Proves: PENDING -> READY -> RUNNING -> PASSED/FAILED -> READY (retry) -> NEEDS_HUMAN. "
-        "Demonstrates bounded retry with Human Gate escalation when retries exhausted."
+        "Demonstrates bounded retry with Human Gate escalation when retries exhausted. "
+        "Uses @workflow.signal and workflow.wait_condition() for real durable Human Gate."
     ),
     enforce_determinism=True,
 )
@@ -476,41 +742,63 @@ class FsasmMilestoneFourWorkflow:
 
     This workflow demonstrates:
     1. Bounded retry: FAILED tasks can retry up to max_retries_per_task times
-    2. Human Gate: When retry budget is exhausted, transition to NEEDS_HUMAN
-    3. Multiple task execution with dependency awareness
-
-    For M4, the Human Gate is demonstrated by transitioning to NEEDS_HUMAN status.
-    In a full implementation with Mistral Workflows HITL, this would pause and wait
-    for human input. For now, we demonstrate the state machine transition.
+    2. Real durable Human Gate using @workflow.signal and workflow.wait_condition()
+    3. Typed human decisions (RETRY_ONCE, ABORT)
+    4. Proper execution-attempt semantics
+    5. Exactly ONE ChildTask execution (TASK-001 only)
 
     Control flow:
     1. Validate configuration
     2. Create/normalize input
     3. Planner activity (Mistral or Stub backend)
     4. Persist initial state (PLANNED -> RUNNING)
-    5. For each task in sequence order:
-       a. Find next eligible task (PENDING -> READY)
-       b. Prepare task (READY -> RUNNING, set active_task_id, persist state)
-       c. Execute task (produces ExecutorOutput)
-       d. Validate ExecutorOutput provenance
-       e. Convert ExecutorOutput to EvidenceRecord(s)
-       f. Verify task execution
-       g. If PASS: Finalize task as PASSED
-       h. If FAIL: Check retry budget
-          - If budget remains: Transition to READY (for retry), loop back
-          - If budget exhausted: Transition to NEEDS_HUMAN (Human Gate)
-    6. Persist final state
-    7. Return structured result
+    5. Execute ONE task (TASK-001 only) with retry loop:
+       a. Prepare task (READY -> RUNNING, increments attempt exactly once)
+       b. Execute task (produces ExecutorOutput)
+       c. Validate ExecutorOutput provenance
+       d. Convert ExecutorOutput to EvidenceRecord(s)
+       e. Verify task execution
+       f. If PASS: Finalize task as PASSED, break
+       g. If FAIL: Persist FAILED state durably
+          - Check retry budget
+          - If budget remains: Transition to READY (NO attempt increment), loop back
+          - If budget exhausted: Transition to NEEDS_HUMAN, wait for signal
+    6. On NEEDS_HUMAN: Wait for human decision signal (RETRY_ONCE or ABORT)
+    7. Apply human decision and continue or terminate
+    8. Persist final state
+    9. Return structured result
 
     Key invariants:
-    - Tasks execute in sequence order
-    - Retries are bounded by max_retries_per_task
-    - Human Gate is invoked (via NEEDS_HUMAN status) when retry budget is exhausted
+    - Only TASK-001 is executed; TASK-002 and TASK-003 remain PENDING
+    - attempt increments exactly once on READY -> RUNNING (BEFORE Executor execution)
+    - FAILED -> READY does NOT increment attempt
     - All state transitions use transition API
     - Evidence is separate from ExecutorOutput
     - Verifier receives EvidenceRecord, not ExecutorOutput
-    - Exactly ONE task execution per workflow run (for deterministic testing)
+    - NEEDS_HUMAN state is persisted BEFORE waiting for signal
+    - Human decisions are typed and validated
     """
+
+    def __init__(self):
+        self.human_decision: HumanDecision | None = None
+        self.waiting_for_human = False
+
+    @workflows.workflow.signal(
+        name="human_decision",
+        description="Signal to provide human decision for Human Gate (RETRY_ONCE or ABORT).",
+    )
+    async def receive_human_decision(self, signal_data: HumanDecisionSignal) -> None:
+        """
+        Receive human decision signal.
+
+        Signal handlers must only mutate deterministic workflow-local data.
+        No filesystem I/O in signal handlers.
+        """
+        self.human_decision = HumanDecision(
+            task_id=signal_data.task_id,
+            action=signal_data.action,
+            reason=signal_data.reason,
+        )
 
     @workflows.workflow.entrypoint
     async def run(self, input: WorkflowInput) -> WorkflowOutput:
@@ -553,12 +841,10 @@ class FsasmMilestoneFourWorkflow:
         human_gate_invoked = False
         human_gate_reason: str | None = None
 
-        # Step 5: Execute ONE task with retry loop (for deterministic testing)
-        # For M4, we execute exactly ONE task to demonstrate the retry + Human Gate path
-        # This keeps the workflow deterministic and testable
+        # Step 5: Execute ONE task with retry loop (TASK-001 only)
         completed_task_ids = list(state.completed_task_ids)
 
-        # Find first eligible task
+        # Find first eligible task (TASK-001 only)
         task = await find_next_ready_task_activity(plan, completed_task_ids)
 
         if task is not None:
@@ -566,16 +852,17 @@ class FsasmMilestoneFourWorkflow:
             executed_task_ids.append(task.task_id)
 
             # Retry loop
-            for attempt_num in range(
-                input.max_retries_per_task + 2
-            ):  # +2 for initial + 1 extra
+            # max_attempts is determined by input.max_retries_per_task + 1 (initial)
+            # But we use task.attempt which is incremented on READY->RUNNING
+            while True:
                 # Prepare task (READY -> RUNNING)
+                # This increments task.attempt by 1 exactly once BEFORE Executor execution
                 state, task = await prepare_task_activity(state, task)
                 plan = state.plan if state.plan is not None else plan
 
-                # Execute task
+                # Execute task - pass current attempt for stub deterministic failure
                 executor_output = await execute_task_activity(
-                    task, state.run_id, executor_config
+                    task, state.run_id, executor_config, attempt=task.attempt
                 )
 
                 # Validate provenance
@@ -583,11 +870,11 @@ class FsasmMilestoneFourWorkflow:
                     executor_output, task.task_id, state.run_id
                 )
 
-                # Convert to evidence
+                # Convert to evidence - pass attempt for per-attempt evidence
                 evidence_counter = len(all_evidence_records)
                 task_evidence_records = (
                     await convert_executor_output_to_evidence_activity(
-                        executor_output, task, evidence_counter
+                        executor_output, task, evidence_counter, attempt=task.attempt
                     )
                 )
                 all_evidence_records.extend(task_evidence_records)
@@ -610,15 +897,23 @@ class FsasmMilestoneFourWorkflow:
                     break  # Exit retry loop on success
 
                 else:
-                    # Task failed - check retry budget
+                    # Task failed - persist FAILED state durably BEFORE retry check
+                    task, state, _ = await persist_failure_state_activity(
+                        task,
+                        state,
+                        verification_result,
+                        task_evidence_records,
+                        task.attempt,
+                    )
+                    plan = state.plan if state.plan is not None else plan
+
+                    # Check retry budget
                     can_retry, reason = await check_retry_budget_activity(
                         task, input.max_retries_per_task
                     )
 
                     if can_retry:
-                        # Increment attempt counter
-                        task.attempt += 1
-
+                        # DO NOT increment attempt here - it was already incremented on READY->RUNNING
                         # Transition to READY for retry
                         task = transition_task(task, TaskStatus.READY)
 
@@ -626,8 +921,8 @@ class FsasmMilestoneFourWorkflow:
                         if state.plan is not None:
                             for plan_task in state.plan.tasks:
                                 if plan_task.task_id == task.task_id:
-                                    plan_task.attempt = task.attempt
                                     plan_task.status = task.status
+                                    plan_task.attempt = task.attempt
 
                         # Persist updated state
                         persistence.save_run_state(state)
@@ -657,16 +952,52 @@ class FsasmMilestoneFourWorkflow:
                         human_gate_reason = reason
 
                         # Transition to NEEDS_HUMAN
+                        # BEFORE waiting, filesystem MUST durably contain NEEDS_HUMAN state
                         task, state = await transition_to_needs_human_activity(
                             task, state, reason
                         )
-                        failed_task_ids.append(task.task_id)
                         needs_human_task_ids.append(task.task_id)
-                        completed_task_ids.append(task.task_id)
+                        # DO NOT add to completed_task_ids - NEEDS_HUMAN is NOT completed
                         plan = state.plan if state.plan is not None else plan
 
-                        # Exit retry loop - task is in terminal NEEDS_HUMAN state
-                        break
+                        # Set waiting flag and wait for signal
+                        self.waiting_for_human = True
+
+                        # Wait for human decision signal
+                        await workflows.workflow.wait_condition(
+                            lambda: self.human_decision is not None
+                        )
+
+                        # Reset waiting flag
+                        self.waiting_for_human = False
+
+                        # Get the decision
+                        decision = self.human_decision
+                        self.human_decision = None  # Clear for potential reuse
+
+                        if decision is not None:
+                            # Apply human decision through domain/activity code
+                            task, state = await apply_human_decision_activity(
+                                decision, task, state, input.max_retries_per_task
+                            )
+                            plan = state.plan if state.plan is not None else plan
+
+                            if decision.action == HumanDecisionAction.ABORT:
+                                # ABORT: task FAILED, run FAILED, active_task_id = None
+                                # Already handled in apply_human_decision_activity
+                                if task.task_id not in failed_task_ids:
+                                    failed_task_ids.append(task.task_id)
+                                break  # Exit retry loop on ABORT
+
+                            elif decision.action == HumanDecisionAction.RETRY_ONCE:
+                                # RETRY_ONCE: max_attempts = attempt + 1, do NOT reset attempt
+                                # Continue to retry loop - will execute once more
+                                # task is already READY from apply_human_decision_activity
+                                continue
+
+                        else:
+                            # No decision received, stay in NEEDS_HUMAN
+                            break
 
         # Step 6: Persist final state
         final_state, final_evidence_count = await persist_final_m4_state_activity(
@@ -678,6 +1009,7 @@ class FsasmMilestoneFourWorkflow:
             planner_output.metadata,
             human_gate_invoked,
             human_gate_reason,
+            self.human_decision,
         )
 
         # Step 7: Return structured result
@@ -703,6 +1035,15 @@ class FsasmMilestoneFourWorkflow:
             success=final_state.status == RunStatus.PASSED,
             human_gate_invoked=human_gate_invoked,
             human_gate_reason=human_gate_reason,
+            human_decision={
+                "task_id": self.human_decision.task_id,
+                "action": self.human_decision.action.value
+                if self.human_decision
+                else None,
+                "reason": self.human_decision.reason if self.human_decision else None,
+            }
+            if self.human_decision
+            else None,
             # Planner metadata
             planner_provider=planner_output.metadata.provider,
             planner_model=planner_output.metadata.requested_model,

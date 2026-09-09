@@ -69,6 +69,20 @@ class VerificationType(str, Enum):
 
 
 # =============================================================================
+# HUMAN DECISION ENUMS (M4)
+# =============================================================================
+
+
+class HumanDecisionAction(str, Enum):
+    """Human decision actions for Human Gate."""
+
+    RETRY_ONCE = "RETRY_ONCE"
+    ABORT = "ABORT"
+    SKIP = "SKIP"
+    CONTINUE = "CONTINUE"
+
+
+# =============================================================================
 # MODELS
 # =============================================================================
 
@@ -174,6 +188,12 @@ class ExecutorConfig(BaseModel):
     )
     temperature: float = Field(
         default=0.0, ge=0.0, le=2.0, description="Sampling temperature."
+    )
+    # M4: Deterministic stub failure configuration
+    stub_fail_first_n_attempts: int = Field(
+        default=0,
+        ge=0,
+        description="Number of initial attempts that should fail (0=always pass, 999=always fail).",
     )
 
 
@@ -596,3 +616,31 @@ class RunState(BaseModel):
         """Update the updated_at timestamp."""
         self.updated_at = datetime.utcnow().isoformat() + "Z"
         return self
+
+
+# =============================================================================
+# HUMAN DECISION MODELS (M4)
+# =============================================================================
+
+
+class HumanDecision(BaseModel):
+    """
+    Human decision model for Human Gate.
+
+    Represents a typed human decision with task context.
+    Signal handlers must only mutate deterministic workflow-local data.
+    Validate and persist the decision through domain/activity code.
+    """
+
+    task_id: str = Field(..., description="The task_id this decision applies to.")
+    action: HumanDecisionAction = Field(
+        ..., description="Human decision action: RETRY_ONCE, ABORT, SKIP, CONTINUE."
+    )
+    reason: str = Field(default="", description="Optional reason for the decision.")
+
+    @field_validator("task_id")
+    @classmethod
+    def task_id_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("task_id cannot be empty")
+        return v.strip()

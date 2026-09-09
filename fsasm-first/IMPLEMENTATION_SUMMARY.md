@@ -9,7 +9,7 @@ This document summarizes the implementation of **FS-ASM Milestone 1** (determini
 - **Milestone 1**: CLOSED \u2705
 - **Milestone 2**: CLOSED \u2705
 - **Milestone 3**: CLOSED \u2705
-- **Milestone 4**: CLOSED \u2705
+- **Milestone 4**: IMPLEMENTED — READY FOR EXTERNAL REVIEW
 
 ## What Was Built
 
@@ -263,6 +263,8 @@ With the following invariants:
 ---
 
 ## What's Next (Milestone 5)
+
+M4 is now IMPLEMENTED and READY FOR EXTERNAL REVIEW.
 
 The following are **NOT** implemented yet (per AGENTS.md scope):
 

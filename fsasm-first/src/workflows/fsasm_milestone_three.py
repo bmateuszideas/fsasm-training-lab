@@ -415,8 +415,9 @@ class FsasmMilestoneThreeWorkflow:
         executed_task_id = task.task_id
 
         # Step 7: Execute task (produces ExecutorOutput)
+        # Pass task.attempt (1-indexed after prepare_task_activity)
         executor_output = await execute_task_activity(
-            task, state.run_id, executor_config
+            task, state.run_id, executor_config, attempt=task.attempt
         )
 
         # Step 8: Validate ExecutorOutput provenance
@@ -428,7 +429,7 @@ class FsasmMilestoneThreeWorkflow:
         # Use a deterministic counter (0 for first/only execution)
         evidence_counter = 0
         task_evidence_records = await convert_executor_output_to_evidence_activity(
-            executor_output, task, evidence_counter
+            executor_output, task, evidence_counter, attempt=task.attempt
         )
 
         # Step 10: Verify task execution

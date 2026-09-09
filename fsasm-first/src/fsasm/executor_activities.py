@@ -1,4 +1,4 @@
-"""FS-ASM Executor Activities - activity-based execution with Stub backend for milestone 3."""
+"""FS-ASM Executor Activities - activity-based execution with Stub backend for milestone 3 and 4."""
 
 import logging
 
@@ -40,33 +40,41 @@ async def execute_task_activity(
     task: ChildTask,
     run_id: str,
     executor_config: ExecutorConfig,
+    attempt: int = 0,
 ) -> ExecutorOutput:
     """
     Execute a single task using the configured executor backend.
 
-    For M3, only STUB backend is implemented.
+    For M3/M4, only STUB backend is implemented.
     The executor produces ExecutorOutput (a CLAIM/RESULT).
+
+    For M4: The attempt parameter is passed to the stub executor to control
+    deterministic failure behavior (stub_fail_first_n_attempts).
 
     Args:
         task: The ChildTask to execute.
         run_id: The run_id for traceability.
         executor_config: The ExecutorConfig specifying which backend to use.
+        attempt: The current attempt number (0-indexed) for M4 deterministic failure.
 
     Returns:
         ExecutorOutput from the executor.
 
     Raises:
-        ConfigurationError: If backend is not STUB (for M3).
+        ConfigurationError: If backend is not STUB.
     """
     if executor_config.backend != ExecutorBackend.STUB:
         raise ConfigurationError(
-            message=f"Milestone 3 only supports ExecutorBackend.STUB, got '{executor_config.backend}'",
+            message=f"Milestone 3/4 only supports ExecutorBackend.STUB, got '{executor_config.backend}'",
             backend=executor_config.backend.value,
         )
 
-    # Use the stub executor
-    executor = ExecutorStub()
-    output = await executor.execute_async(task, run_id)
+    # Use the stub executor - pass attempt for M4 deterministic failure
+    # Pass stub_fail_first_n_attempts from config to executor
+    executor = ExecutorStub(
+        stub_fail_first_n_attempts=executor_config.stub_fail_first_n_attempts
+    )
+    output = await executor.execute_async(task, run_id, attempt)
 
     return output
 
@@ -153,20 +161,23 @@ async def convert_executor_output_to_evidence_activity(
     executor_output: ExecutorOutput,
     task: ChildTask,
     evidence_counter: int,
+    attempt: int = 0,
 ) -> list[EvidenceRecord]:
     """
     Convert validated ExecutorOutput to EvidenceRecord(s).
 
-    For deterministic M3 stub execution:
+    For deterministic M3/M4 stub execution:
     - If task.expected_evidence is empty, create one fallback evidence record with kind "executor_output"
     - Otherwise, create one EvidenceRecord per declared expected evidence kind
 
     Uses deterministic safe IDs (ordinal counters) while keeping the original evidence kind as data.
+    For M4, includes attempt number in evidence metadata.
 
     Args:
         executor_output: The validated ExecutorOutput.
         task: The ChildTask being executed.
         evidence_counter: An ordinal counter for generating deterministic evidence IDs.
+        attempt: The current attempt number for this execution.
 
     Returns:
         List of EvidenceRecord instances.
@@ -187,6 +198,7 @@ async def convert_executor_output_to_evidence_activity(
             payload={
                 "executor_output": executor_output.model_dump(),
                 "original_evidence_kinds": [],
+                "attempt": attempt,
             },
         )
         evidence_records.append(evidence_record)
@@ -206,6 +218,7 @@ async def convert_executor_output_to_evidence_activity(
                     "executor_output": executor_output.model_dump(),
                     "original_evidence_kind": expected_kind,
                     "evidence_index": idx,
+                    "attempt": attempt,
                 },
             )
             evidence_records.append(evidence_record)
@@ -273,6 +286,8 @@ async def prepare_task_activity(
 
     If the workflow crashes immediately after prepare, filesystem state must still be internally consistent.
 
+    Note: transition_task(READY->RUNNING) increments task.attempt by 1.
+
     Args:
         state: The current RunState.
         task: The ChildTask to prepare.
@@ -288,7 +303,7 @@ async def prepare_task_activity(
     if state.status == RunStatus.PLANNED:
         state = transition_run(state, RunStatus.RUNNING)
 
-    # Transition task to RUNNING
+    # Transition task to RUNNING (this increments attempt counter)
     task = transition_task(task, TaskStatus.RUNNING)
 
     # Update state
@@ -364,16 +379,25 @@ async def finalize_task_activity(
     # Determine final task status from verification
     if verification_result.status == VerificationResultStatus.PASS:
         task = transition_task(task, TaskStatus.PASSED, verification_pass=True)
-        state.completed_task_ids.append(task.task_id)
+        # Only add to completed if not already there (prevent duplicates)
+        if task.task_id not in state.completed_task_ids:
+            state.completed_task_ids.append(task.task_id)
+        # Ensure not in failed
+        if task.task_id in state.failed_task_ids:
+            state.failed_task_ids.remove(task.task_id)
     else:
         task = transition_task(task, TaskStatus.FAILED, verification_pass=False)
-        state.failed_task_ids.append(task.task_id)
+        # Only add to failed if not already there (prevent duplicates)
+        if task.task_id not in state.failed_task_ids:
+            state.failed_task_ids.append(task.task_id)
+        # Ensure not in completed
+        if task.task_id in state.completed_task_ids:
+            state.completed_task_ids.remove(task.task_id)
 
     # Clear active task
     state.active_task_id = None
 
-    # RunState remains RUNNING (per M3 requirements)
-    # state.status = RunStatus.RUNNING  # Already RUNNING
+    # RunState remains RUNNING
 
     # Update plan in state to reflect task status change
     if state.plan is not None:
@@ -381,6 +405,7 @@ async def finalize_task_activity(
         for plan_task in plan.tasks:
             if plan_task.task_id == task.task_id:
                 plan_task.status = task.status
+                plan_task.attempt = task.attempt
             # Other tasks remain in their current status (should be PENDING)
 
     # Persist evidence records
