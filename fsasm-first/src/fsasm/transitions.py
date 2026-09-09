@@ -132,6 +132,8 @@ def transition_task(
             )
 
     # Check retry budget for FAILED -> READY or FAILED -> NEEDS_HUMAN
+    # Under unified semantics: can_retry() returns True iff attempt < max_attempts
+    # So if attempt < max_attempts, we can retry; if attempt >= max_attempts, we must go to NEEDS_HUMAN
     if (current_status, target_status) in _TASK_REQUIRES_RETRY_CHECK:
         if target_status == TaskStatus.NEEDS_HUMAN:
             # FAILED -> NEEDS_HUMAN: only allowed if retry budget is exhausted
@@ -201,6 +203,127 @@ def transition_run(
                 entity_id=state.run_id,
                 reason="Transition to PASSED requires verification PASS",
             )
+
+    # Perform the transition
+    state.status = target_status
+    state.touch()
+    return state
+
+
+# =============================================================================
+# HUMAN-AUTHORIZED TRANSITIONS (M4)
+# =============================================================================
+
+
+def apply_human_authorized_task_transition(
+    task: ChildTask,
+    target_status: TaskStatus,
+    new_max_attempts: int | None = None,
+) -> ChildTask:
+    """
+    Apply a human-authorized transition that bypasses normal domain rules.
+
+    This is used for human decisions (RETRY_ONCE, ABORT) that need to transition
+    out of NEEDS_HUMAN terminal state.
+
+    For RETRY_ONCE:
+    - NEEDS_HUMAN -> READY
+    - Set max_attempts = attempt + 1 (exactly one more try)
+    - Do NOT reset attempt
+
+    For ABORT:
+    - NEEDS_HUMAN -> FAILED
+
+    Args:
+        task: The ChildTask to transition.
+        target_status: The desired new status (READY for RETRY_ONCE, FAILED for ABORT).
+        new_max_attempts: New max_attempts value (for RETRY_ONCE).
+
+    Returns:
+        The updated ChildTask with new status.
+
+    Raises:
+        InvalidTransitionError: If the transition is not a valid human-authorized transition.
+    """
+    current_status = task.status
+
+    # Only allow human-authorized transitions from NEEDS_HUMAN
+    if current_status != TaskStatus.NEEDS_HUMAN:
+        raise InvalidTransitionError(
+            from_status=current_status.value,
+            to_status=target_status.value,
+            entity_type="ChildTask",
+            entity_id=task.task_id,
+            reason=f"Human-authorized transitions only allowed from NEEDS_HUMAN, got {current_status.value}",
+        )
+
+    # Only allow NEEDS_HUMAN -> READY or NEEDS_HUMAN -> FAILED
+    if target_status not in {TaskStatus.READY, TaskStatus.FAILED}:
+        raise InvalidTransitionError(
+            from_status=current_status.value,
+            to_status=target_status.value,
+            entity_type="ChildTask",
+            entity_id=task.task_id,
+            reason="Human-authorized transitions only allow READY or FAILED from NEEDS_HUMAN",
+        )
+
+    # Apply the transition
+    task.status = target_status
+
+    # For RETRY_ONCE: set max_attempts
+    if new_max_attempts is not None:
+        task.max_attempts = new_max_attempts
+
+    return task
+
+
+def apply_human_authorized_run_transition(
+    state: RunState,
+    target_status: RunStatus,
+) -> RunState:
+    """
+    Apply a human-authorized transition that bypasses normal domain rules.
+
+    This is used for human decisions (RETRY_ONCE, ABORT) that need to transition
+    out of NEEDS_HUMAN terminal state.
+
+    For RETRY_ONCE:
+    - NEEDS_HUMAN -> RUNNING
+
+    For ABORT:
+    - NEEDS_HUMAN -> FAILED
+
+    Args:
+        state: The RunState to transition.
+        target_status: The desired new status (RUNNING for RETRY_ONCE, FAILED for ABORT).
+
+    Returns:
+        The updated RunState with new status.
+
+    Raises:
+        InvalidTransitionError: If the transition is not a valid human-authorized transition.
+    """
+    current_status = state.status
+
+    # Only allow human-authorized transitions from NEEDS_HUMAN
+    if current_status != RunStatus.NEEDS_HUMAN:
+        raise InvalidTransitionError(
+            from_status=current_status.value,
+            to_status=target_status.value,
+            entity_type="RunState",
+            entity_id=state.run_id,
+            reason=f"Human-authorized transitions only allowed from NEEDS_HUMAN, got {current_status.value}",
+        )
+
+    # Only allow NEEDS_HUMAN -> RUNNING or NEEDS_HUMAN -> FAILED
+    if target_status not in {RunStatus.RUNNING, RunStatus.FAILED}:
+        raise InvalidTransitionError(
+            from_status=current_status.value,
+            to_status=target_status.value,
+            entity_type="RunState",
+            entity_id=state.run_id,
+            reason="Human-authorized transitions only allow RUNNING or FAILED from NEEDS_HUMAN",
+        )
 
     # Perform the transition
     state.status = target_status

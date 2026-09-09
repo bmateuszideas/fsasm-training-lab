@@ -167,7 +167,7 @@ class TestChildTask:
             )
 
     def test_child_task_can_retry(self) -> None:
-        """Test can_retry method."""
+        """Test can_retry method with unified semantics."""
         task = ChildTask(
             task_id="TASK-001",
             sequence=1,
@@ -177,14 +177,17 @@ class TestChildTask:
             attempt=0,
             max_attempts=3,
         )
-        assert task.can_retry() is True
+        # With unified semantics: can_retry() returns True iff attempt < max_attempts
+        assert task.can_retry() is True  # 0 < 3
         task.attempt = 1
-        assert task.can_retry() is True
+        assert task.can_retry() is True  # 1 < 3
         task.attempt = 2
-        assert task.can_retry() is False
+        assert task.can_retry() is True  # 2 < 3
+        task.attempt = 3
+        assert task.can_retry() is False  # 3 >= 3
 
     def test_child_task_retry_count_remaining(self) -> None:
-        """Test retry_count_remaining method."""
+        """Test retry_count_remaining method with unified semantics."""
         task = ChildTask(
             task_id="TASK-001",
             sequence=1,
@@ -194,11 +197,14 @@ class TestChildTask:
             attempt=0,
             max_attempts=3,
         )
-        assert task.retry_count_remaining() == 2
+        # With unified semantics: retry_count_remaining() = max(0, max_attempts - attempt)
+        assert task.retry_count_remaining() == 3  # 3 - 0 = 3
         task.attempt = 1
-        assert task.retry_count_remaining() == 1
+        assert task.retry_count_remaining() == 2  # 3 - 1 = 2
         task.attempt = 2
-        assert task.retry_count_remaining() == 0
+        assert task.retry_count_remaining() == 1  # 3 - 2 = 1
+        task.attempt = 3
+        assert task.retry_count_remaining() == 0  # 3 - 3 = 0
 
 
 class TestPlan:

@@ -74,12 +74,10 @@ class VerificationType(str, Enum):
 
 
 class HumanDecisionAction(str, Enum):
-    """Human decision actions for Human Gate."""
+    """Human decision actions for Human Gate (M4)."""
 
     RETRY_ONCE = "RETRY_ONCE"
     ABORT = "ABORT"
-    SKIP = "SKIP"
-    CONTINUE = "CONTINUE"
 
 
 # =============================================================================
@@ -428,12 +426,17 @@ class ChildTask(BaseModel):
         return v.strip()
 
     def can_retry(self) -> bool:
-        """Check if this task can be retried."""
-        return self.attempt < self.max_attempts - 1
+        """
+        Check if this task can be retried.
+
+        Under the current attempt semantics, after attempt N has started,
+        another execution is allowed iff attempt < max_attempts.
+        """
+        return self.attempt < self.max_attempts
 
     def retry_count_remaining(self) -> int:
         """Return remaining retry attempts."""
-        return max(0, self.max_attempts - self.attempt - 1)
+        return max(0, self.max_attempts - self.attempt)
 
 
 class Plan(BaseModel):
@@ -634,7 +637,7 @@ class HumanDecision(BaseModel):
 
     task_id: str = Field(..., description="The task_id this decision applies to.")
     action: HumanDecisionAction = Field(
-        ..., description="Human decision action: RETRY_ONCE, ABORT, SKIP, CONTINUE."
+        ..., description="Human decision action: RETRY_ONCE or ABORT."
     )
     reason: str = Field(default="", description="Optional reason for the decision.")
 

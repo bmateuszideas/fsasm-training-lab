@@ -160,13 +160,18 @@ class TestTaskTransitions:
 
     def test_failed_to_ready_no_budget_fails(self) -> None:
         """Test FAILED -> READY fails when no retry budget remains."""
-        task = self._create_task(status=TaskStatus.FAILED, attempt=2, max_attempts=3)
+        # With unified semantics: can_retry() = attempt < max_attempts
+        # So if attempt=3 and max_attempts=3, can_retry() = False
+        task = self._create_task(status=TaskStatus.FAILED, attempt=3, max_attempts=3)
         with pytest.raises(RetryExhaustedError):
             transition_task(task, TaskStatus.READY)
 
     def test_failed_to_needs_human_with_budget_fails(self) -> None:
         """Test FAILED -> NEEDS_HUMAN fails when retry budget remains."""
-        task = self._create_task(status=TaskStatus.FAILED, attempt=0, max_attempts=3)
+        # With unified semantics: can_retry() = attempt < max_attempts
+        # FAILED -> NEEDS_HUMAN only allowed if can_retry() is False
+        # So if attempt=2 and max_attempts=3, can_retry() = True, should fail
+        task = self._create_task(status=TaskStatus.FAILED, attempt=2, max_attempts=3)
         with pytest.raises(InvalidTransitionError):
             transition_task(task, TaskStatus.NEEDS_HUMAN, verification_pass=False)
 
