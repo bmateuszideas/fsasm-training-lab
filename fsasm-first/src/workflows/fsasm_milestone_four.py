@@ -256,7 +256,9 @@ async def persist_initial_state_activity(
     """
     Persist the plan, planner proposal (as evidence), and initial run state to filesystem.
 
-    Creates initial RunState with PLANNED status, then transitions to RUNNING.
+    Creates initial RunState with PLANNED status.
+    active_task_id=None, all tasks PENDING, authoritative max_attempts already persisted.
+    PLANNED -> RUNNING happens later when task execution is actually prepared.
     """
     persistence = RuntimePersistence()
 
@@ -264,12 +266,8 @@ async def persist_initial_state_activity(
     metadata = planner_output.metadata
     run_id = plan.run_id
 
-    # Set task.max_attempts from planner config or default
-    # For M4, we use the workflow's max_retries_per_task + 1 as the authoritative budget
-    # The authoritative max_attempts is set by set_task_max_attempts_activity before first persistence
-    # No hack needed - the workflow will set it properly
-
     # Create initial run state with PLANNED status
+    # active_task_id=None, all tasks PENDING
     state = RunState(
         run_id=run_id,
         goal=goal_input.goal,
@@ -280,13 +278,10 @@ async def persist_initial_state_activity(
         failed_task_ids=[],
     )
 
-    # Transition to RUNNING
-    state = transition_run(state, RunStatus.RUNNING)
-
-    # Save plan
+    # Save plan (with default max_attempts, will be updated by set_task_max_attempts_activity)
     persistence.save_plan(plan)
 
-    # Save state
+    # Save state with PLANNED status
     persistence.save_run_state(state)
 
     # Save planner proposal as evidence artifact
@@ -961,7 +956,6 @@ class FsasmMilestoneFourWorkflow:
 
     def __init__(self):
         self.human_decision: HumanDecision | None = None
-        self.human_decision_consumed: bool = False
 
     @workflows.workflow.signal(
         name="human_decision",
@@ -979,7 +973,6 @@ class FsasmMilestoneFourWorkflow:
             action=signal_data.action,
             reason=signal_data.reason,
         )
-        self.human_decision_consumed = False
 
     @workflows.workflow.entrypoint
     async def run(self, input: WorkflowInput) -> WorkflowOutput:
@@ -1001,13 +994,18 @@ class FsasmMilestoneFourWorkflow:
         # Step 3: Planner activity (selected backend)
         planner_output = await plan_activity(goal_input, planner_config)
 
-        # Step 4: Persist initial state (PLANNED -> RUNNING)
-        # This also transitions to RUNNING and persists everything
-        plan, state = await persist_initial_state_activity(planner_output, goal_input)
+        # Step 4: Set authoritative task.max_attempts BEFORE first save_plan/save_run_state
+        plan = await set_task_max_attempts_activity(
+            planner_output.plan, input.max_retries_per_task
+        )
+        planner_output = PlannerOutput(
+            plan=plan,
+            proposal=planner_output.proposal,
+            metadata=planner_output.metadata,
+        )
 
-        # Step 5: Set authoritative task.max_attempts from workflow config
-        plan = await set_task_max_attempts_activity(plan, input.max_retries_per_task)
-        state.plan = plan
+        # Step 5: Persist initial state with authoritative max_attempts already set
+        plan, state = await persist_initial_state_activity(planner_output, goal_input)
 
         # Track execution results
         executed_task_ids: list[str] = []
@@ -1116,19 +1114,18 @@ class FsasmMilestoneFourWorkflow:
                         # DO NOT add to completed_task_ids - NEEDS_HUMAN is NOT completed
                         plan = state.plan if state.plan is not None else plan
 
-                        # Clear the workflow-local pending decision before waiting
-                        # A previous RETRY_ONCE must never satisfy a later wait_condition()
-                        self.human_decision_consumed = True
-                        self.human_decision = None
-
-                        # Set waiting flag and wait for signal
                         # Wait for human decision signal
+                        # A signal may legally arrive after NEEDS_HUMAN was durably persisted
+                        # but before workflow code reaches the wait.
+                        # wait_condition ensures we don't miss early signals.
                         await workflows.workflow.wait_condition(
                             lambda: self.human_decision is not None
                         )
 
-                        # Get the decision and clear it immediately
-                        # Consume Human Gate signals exactly once
+                        # Wait until pending decision is non-None, copy the decision,
+                        # immediately clear the pending slot, then apply the copied decision.
+                        # This guarantees exactly-once consumption while preserving signals
+                        # that arrive early.
                         decision = self.human_decision
                         self.human_decision = None
 

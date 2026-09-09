@@ -1383,8 +1383,294 @@ class TestEdgeCases:
 
 
 # =============================================================================
+# WORKER-LEVEL TESTS - Regression: Initial persistence ordering
+# =============================================================================
+
+
+class TestInitialPersistenceOrdering:
+    """
+    Regression test: authoritative task.max_attempts MUST be established before
+    the first save_plan() / save_run_state().
+
+    Restore the proven M3 durability convention exactly:
+    - initial durable state = PLANNED
+    - active_task_id = None
+    - all tasks PENDING
+    - authoritative max_attempts already persisted
+    - PLANNED -> RUNNING happens later when task execution is actually prepared
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_runtime(self):
+        """Clean up runtime directory before and after each test."""
+        persistence = RuntimePersistence()
+        persistence.cleanup_all()
+        yield
+        persistence.cleanup_all()
+
+    @pytest.mark.asyncio
+    async def test_initial_persistence_ordering_worker_level(
+        self, temporal_env
+    ):
+        """
+        Test that authoritative max_attempts is established before first persistence.
+        Inspect the first durable state before prepare and prove PLANNED + correct max_attempts.
+        """
+        from mistralai.workflows.testing import create_test_worker
+        from datetime import timedelta
+
+        WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=15)
+        test_run_id = "test-fsasm-m4-initial-persistence"
+
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=[
+                create_input_activity,
+                validate_config_activity,
+                plan_activity,
+                persist_initial_state_activity,
+                set_task_max_attempts_activity,
+                find_next_ready_task_activity,
+                prepare_task_activity,
+                execute_task_activity,
+                validate_executor_output_provenance_activity,
+                convert_executor_output_to_evidence_activity,
+                verify_task_execution_activity,
+                finalize_task_activity,
+                check_retry_budget_activity,
+                persist_failure_state_activity,
+                persist_retry_state_activity,
+                transition_to_needs_human_activity,
+                validate_and_apply_human_decision_activity,
+                persist_final_m4_state_activity,
+            ],
+        ):
+            # Execute workflow with max_retries=2 (3 total attempts)
+            handle = await temporal_env.client.start_workflow(
+                "fsasm-milestone-four",
+                {
+                    "goal": "Test initial persistence ordering",
+                    "planner_backend": "stub",
+                    "executor_backend": "stub",
+                    "max_retries_per_task": 2,
+                    "stub_fail_first_n_attempts": 0,
+                    "run_id": test_run_id,
+                },
+                id=test_run_id,
+                task_queue="test-task-queue",
+                execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
+            )
+
+            # Wait for initial persistence to complete
+            persistence = RuntimePersistence()
+            max_wait = 10
+            observed_initial_state = False
+            for _ in range(max_wait * 10):
+                await asyncio.sleep(0.1)
+                try:
+                    loaded_state = persistence.load_run_state(test_run_id)
+                    loaded_plan = persistence.load_plan(test_run_id)
+                    if (
+                        loaded_state is not None
+                        and loaded_plan is not None
+                        and loaded_state.status == RunStatus.PLANNED
+                        and loaded_state.active_task_id is None
+                        and len(loaded_plan.tasks) == 3
+                        and loaded_plan.tasks[0].status == TaskStatus.PENDING
+                        and loaded_plan.tasks[1].status == TaskStatus.PENDING
+                        and loaded_plan.tasks[2].status == TaskStatus.PENDING
+                        and loaded_plan.tasks[0].max_attempts == 3  # 2 retries + 1
+                        and loaded_plan.tasks[1].max_attempts == 3
+                        and loaded_plan.tasks[2].max_attempts == 3
+                    ):
+                        observed_initial_state = True
+                        break
+                except Exception:
+                    continue
+
+            assert observed_initial_state, (
+                "Initial durable state with PLANNED status, active_task_id=None, "
+                "all tasks PENDING, and authoritative max_attempts=3 was not observed"
+            )
+
+            # Wait for completion
+            result = await asyncio.wait_for(
+                handle.result(), timeout=10
+            )
+
+            # Verify final result
+            assert isinstance(result, dict)
+            assert result["success"] is True
+            assert "TASK-001" in result["passed_task_ids"]
+
+
+# =============================================================================
+# WORKER-LEVEL TESTS - Regression: Signal cannot be lost
+# =============================================================================
+
+
+class TestSignalCannotBeLost:
+    """
+    Regression test: signal sent immediately after observing NEEDS_HUMAN cannot be lost.
+
+    This proves that signals arriving after NEEDS_HUMAN is durably persisted but before
+    workflow code reaches wait_condition() are not lost.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_runtime(self):
+        """Clean up runtime directory before and after each test."""
+        persistence = RuntimePersistence()
+        persistence.cleanup_all()
+        yield
+        persistence.cleanup_all()
+
+    @pytest.mark.asyncio
+    async def test_signal_sent_immediately_after_needs_human_not_lost(
+        self, temporal_env
+    ):
+        """
+        Test that signal sent immediately after observing NEEDS_HUMAN is not lost.
+        Sends the signal immediately after observing persisted NEEDS_HUMAN and proves
+        it cannot be lost.
+        """
+        from mistralai.workflows.testing import create_test_worker
+        from datetime import timedelta
+
+        WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=15)
+        test_run_id = "test-fsasm-m4-signal-not-lost"
+
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=[
+                create_input_activity,
+                validate_config_activity,
+                plan_activity,
+                persist_initial_state_activity,
+                set_task_max_attempts_activity,
+                find_next_ready_task_activity,
+                prepare_task_activity,
+                execute_task_activity,
+                validate_executor_output_provenance_activity,
+                convert_executor_output_to_evidence_activity,
+                verify_task_execution_activity,
+                finalize_task_activity,
+                check_retry_budget_activity,
+                persist_failure_state_activity,
+                persist_retry_state_activity,
+                transition_to_needs_human_activity,
+                validate_and_apply_human_decision_activity,
+                persist_final_m4_state_activity,
+            ],
+        ):
+            # Execute workflow with max_retries=0 (1 total attempt), always fail
+            handle = await temporal_env.client.start_workflow(
+                "fsasm-milestone-four",
+                {
+                    "goal": "Test signal not lost",
+                    "planner_backend": "stub",
+                    "executor_backend": "stub",
+                    "max_retries_per_task": 0,
+                    "stub_fail_first_n_attempts": 999,
+                    "run_id": test_run_id,
+                },
+                id=test_run_id,
+                task_queue="test-task-queue",
+                execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
+            )
+
+            # Wait for workflow to reach NEEDS_HUMAN state
+            persistence = RuntimePersistence()
+
+            max_wait = 10
+            observed_needs_human = False
+            for _ in range(max_wait * 10):
+                await asyncio.sleep(0.1)
+                try:
+                    loaded_state = persistence.load_run_state(test_run_id)
+                    loaded_plan = persistence.load_plan(test_run_id)
+                    if (
+                        loaded_state is not None
+                        and loaded_state.status == RunStatus.NEEDS_HUMAN
+                        and loaded_plan is not None
+                        and loaded_plan.tasks[0].status == TaskStatus.NEEDS_HUMAN
+                        and loaded_state.active_task_id is None
+                        and loaded_plan.tasks[0].attempt == 1
+                        and loaded_plan.tasks[0].max_attempts == 1
+                    ):
+                        observed_needs_human = True
+                        break
+                except Exception:
+                    continue
+
+            assert observed_needs_human, (
+                "Human Gate state (NEEDS_HUMAN for both task and run) was not observed"
+            )
+
+            # Send ABORT signal immediately after observing NEEDS_HUMAN
+            # This signal may arrive before workflow code reaches wait_condition()
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.ABORT,
+                    reason="Test ABORT immediately after NEEDS_HUMAN",
+                ),
+            )
+
+            # Wait for completion
+            result = await asyncio.wait_for(
+                handle.result(), timeout=10
+            )
+
+            # Verify structured result
+            assert isinstance(result, dict)
+            assert result["run_id"] == test_run_id
+            assert result["status"] == "FAILED"
+            assert result["human_gate_invoked"] is True
+            assert result["success"] is False
+
+            # Verify human decision was recorded
+            assert result["human_decision"] is not None
+            assert result["human_decision"]["task_id"] == "TASK-001"
+            assert result["human_decision"]["action"] == "ABORT"
+
+            # Verify TASK-001 FAILED
+            assert "TASK-001" in result["failed_task_ids"]
+            assert "TASK-001" not in result["passed_task_ids"]
+
+            # Verify final persisted state
+            loaded_state = persistence.load_run_state(test_run_id)
+            loaded_plan = persistence.load_plan(test_run_id)
+
+            assert loaded_state is not None
+            assert loaded_state.status == RunStatus.FAILED
+            assert loaded_state.active_task_id is None
+            assert "TASK-001" in loaded_state.failed_task_ids
+
+            assert loaded_plan is not None
+            assert loaded_plan.tasks[0].status == TaskStatus.FAILED
+            assert loaded_plan.tasks[0].attempt == 1
+            assert loaded_plan.tasks[0].max_attempts == 1
+
+            # Verify Human Gate audit evidence persisted
+            persisted_evidence = persistence.load_all_evidence(test_run_id)
+            human_gate_audit = [
+                e
+                for e in persisted_evidence
+                if e.kind == "human_gate_audit"
+                and e.payload.get("action") == "ABORT"
+            ]
+            assert len(human_gate_audit) == 1
+            assert human_gate_audit[0].payload["task_id"] == "TASK-001"
+
+
+# =============================================================================
 # WORKER-LEVEL TESTS - Regression: RETRY_ONCE authorizes exactly one additional execution
 # =============================================================================
+
 
 
 class TestRetryOnceRegressionWorker:
