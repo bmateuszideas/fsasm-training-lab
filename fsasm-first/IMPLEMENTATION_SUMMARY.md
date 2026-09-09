@@ -1,13 +1,14 @@
-# FS-ASM Implementation Summary - Milestone 1 & 2
+# FS-ASM Implementation Summary - Milestone 1, 2 & 3
 
 ## Overview
 
-This document summarizes the implementation of **FS-ASM Milestone 1** (deterministic stub planner) and **Milestone 2** (real Mistral Planner integration).
+This document summarizes the implementation of **FS-ASM Milestone 1** (deterministic stub planner), **Milestone 2** (real Mistral Planner integration), and **Milestone 3** (Executor + execution verification for ONE eligible ChildTask).
 
 ## Status
 
-- **Milestone 1**: CLOSED ✅
-- **Milestone 2**: CLOSED ✅
+- **Milestone 1**: CLOSED \u2705
+- **Milestone 2**: CLOSED \u2705
+- **Milestone 3**: CLOSED \u2705
 
 ## What Was Built
 
@@ -17,14 +18,14 @@ The implementation follows the **FS-ASM** (File System as State Machine) pattern
 
 - **Domain Core** (`src/fsasm/`): Pure Python + Pydantic models for state, plans, tasks, verification, and transitions
 - **Persistence** (`src/fsasm/persistence.py`): Filesystem JSON with atomic writes
-- **Workflow Orchestration** (`src/workflows/fsasm_milestone_one.py`, `fsasm_milestone_two.py`): Mistral Workflows-based deterministic control flow
+- **Workflow Orchestration** (`src/workflows/fsasm_milestone_one.py`, `fsasm_milestone_two.py`, `fsasm_milestone_three.py`): Mistral Workflows-based deterministic control flow
 - **Activities**: Filesystem I/O, model calls, and heavy operations delegated to activities
 
 ### Domain Models (Pydantic)
 
 | Model | Purpose | Key Fields |
 |-------|---------|------------|
-| `GoalInput` | Workflow input | `goal: str`, `run_id: str | None` |
+| `GoalInput` | Workflow input | `goal: str`, `run_id: str \| None` |
 | `PlannerBackend` | Backend enum | `STUB`, `MISTRAL` |
 | `PlannerConfig` | Backend configuration | `backend`, `model_name`, `prompt_version` |
 | `PlannerProposal` | LLM semantic proposal | `tasks: list[TaskProposal]` (no runtime fields) |
@@ -34,17 +35,21 @@ The implementation follows the **FS-ASM** (File System as State Machine) pattern
 | `Plan` | Execution plan | `plan_id: str`, `run_id: str`, `goal: str`, `tasks: list[ChildTask]` |
 | `ChildTask` | Atomic task unit | `task_id: str`, `sequence: int`, `status: TaskStatus`, `dependencies: list[str]` |
 | `VerificationSpec` | Verification rules | `type: VerificationType`, `expected: str` |
-| `VerificationResult` | Verification outcome | `status: PASS | FAIL`, `checks: list[VerificationCheck]` |
+| `VerificationResult` | Verification outcome | `status: PASS \| FAIL`, `checks: list[VerificationCheck]` |
 | `EvidenceRecord` | Persistent evidence | `evidence_id: str`, `run_id: str`, `kind: str`, `payload: dict` |
-| `RunState` | Runtime state | `run_id: str`, `status: RunStatus`, `plan: Plan | None` |
+| `RunState` | Runtime state | `run_id: str`, `status: RunStatus`, `plan: Plan \| None` |
+| `ExecutorBackend` | Executor backend enum | `STUB`, `LOCAL`, `MISTRAL` |
+| `ExecutorConfig` | Executor configuration | `backend`, `model_name`, `max_tokens`, `temperature` |
+| `ExecutorMetadata` | Executor observability | `run_id`, `task_id`, `provider`, `model_call_count`, `executor_invocation_count`, `input_tokens`, `output_tokens`, `total_tokens`, `provider_request_id` |
+| `ExecutorOutput` | Executor result (CLAIM/RESULT) | `task_id`, `run_id`, `result`, `metadata: ExecutorMetadata` |
 
 ### Status Enums
 
 **RunStatus:**
-- `CREATED` → `PLANNED` → `RUNNING` → `PASSED` | `FAILED` | `NEEDS_HUMAN`
+- `CREATED` \u2192 `PLANNED` \u2192 `RUNNING` \u2192 `PASSED` \| `FAILED` \| `NEEDS_HUMAN`
 
 **TaskStatus:**
-- `PENDING` → `READY` → `RUNNING` → `PASSED` | `FAILED` | `BLOCKED` | `NEEDS_HUMAN`
+- `PENDING` \u2192 `READY` \u2192 `RUNNING` \u2192 `PASSED` \| `FAILED` \| `BLOCKED` \| `NEEDS_HUMAN`
 
 ---
 
@@ -54,23 +59,23 @@ The implementation follows the **FS-ASM** (File System as State Machine) pattern
 
 ```
 Workflow Entry Point
-    ↓
+    \u2193
 create/normalize GoalInput
-    ↓
+    \u2193
 Planner Stub Activity (deterministic, creates exactly 3 tasks)
-    ↓
+    \u2193
 Validate Plan (Pydantic + domain rules)
-    ↓
+    \u2193
 Persist Plan & State Activity (RunState created as CREATED)
-    ↓
-RunState Transition: CREATED → PLANNED (via transition_run() in activity)
-    ↓
+    \u2193
+RunState Transition: CREATED \u2192 PLANNED (via transition_run() in activity)
+    \u2193
 Persist Evidence Activity (pre-verification: plan, state)
-    ↓
+    \u2193
 Final Verification Activity (with all evidence records)
-    ↓
+    \u2193
 Persist Final State Activity (create verification evidence, transition to PASSED/FAILED)
-    ↓
+    \u2193
 Return Structured Result
 ```
 
@@ -78,13 +83,13 @@ Return Structured Result
 
 The verifier performs the following checks:
 
-1. ✅ Valid `Plan` exists
-2. ✅ Contains exactly 3 `ChildTask` instances
-3. ✅ Task IDs are unique
-4. ✅ Dependency references point to valid tasks
-5. ✅ State and plan share the same `run_id`
-6. ✅ **Evidence records exist and are non-empty** (critical fix)
-7. ✅ Final workflow result is unambiguously `PASS` or `FAIL`
+1. \u2705 Valid `Plan` exists
+2. \u2705 Contains exactly 3 `ChildTask` instances
+3. \u2705 Task IDs are unique
+4. \u2705 Dependency references point to valid tasks
+5. \u2705 State and plan share the same `run_id`
+6. \u2705 **Evidence records exist and are non-empty** (critical fix)
+7. \u2705 Final workflow result is unambiguously `PASS` or `FAIL`
 
 ---
 
@@ -99,111 +104,89 @@ The verifier performs the following checks:
 - **Dependency Validation**: Strict validation `1 <= dep_seq < current_task_sequence` prevents 0, self-dependency, future dependencies, cycles
 - **Observability**: Full metadata with provider, model, prompt version, hashes, token usage, provider_request_id
 
-### Architecture
-
-```
-GoalInput
-    ↓
-Planner Activity (backend-agnostic)
-    ↓
-plan_with_stub() OR plan_with_mistral()
-    ↓
-PlannerProposal (semantic, LLM output for Mistral)
-    ↓
-assemble_plan() (deterministic, same for both backends)
-    ↓
-Plan (runtime-owned, all fields assigned)
-    ↓
-PlannerOutput (proposal + plan + metadata)
-```
-
-### Planner Backend
-
-**`PlannerBackend`**: Enum with two values:
-- `STUB`: Deterministic stub planner (no API calls)
-- `MISTRAL`: Real Mistral API planner
-
-**`PlannerConfig`**: Configuration for the planner:
-- `backend`: `PlannerBackend.STUB` or `PlannerBackend.MISTRAL`
-- `model_name`: Model identifier (e.g., "mistral-large-latest")
-- `prompt_version`: Template version used
-
-### Planner Models
-
-**`PlannerProposal`**: Semantic proposal from LLM (no runtime-owned fields):
-- `tasks: list[TaskProposal]` - List of task proposals
-
-**`TaskProposal`**: Individual task proposal:
-- `title: str` - Task title
-- `description: str` - Task description
-- `dependencies: list[int]` - Dependency sequence numbers (proposal-local, not runtime task IDs)
-- `verification_type: str` - Verification type
-- `verification_expected: str` - Expected verification result
-- `constraints: list[str]` - Task constraints
-- `allowed_files: list[str]` - Allowed files for the task
-- `expected_evidence: list[str]` - Expected evidence
-
-**`PlannerMetadata`**: Complete observability metadata:
-- `provider: str` - "stub" or "mistral"
-- `requested_model: str | None` - Requested model name
-- `resolved_model: str | None` - Actually resolved model name
-- `model_version: str | None` - Model version if available
-- `prompt_version: str` - Template version used
-- `template_hash: str` - SHA256 of prompt template
-- `rendered_hash: str` - SHA256 of rendered prompt (with goal)
-- `model_call_count: int` - 0 for stub, 1 for mistral
-- `planner_invocation_count: int` - Number of planner invocations
-- `input_tokens: int | None` - Input tokens used
-- `output_tokens: int | None` - Output tokens used
-- `total_tokens: int | None` - Total tokens used
-- `provider_request_id: str | None` - Provider-specific request ID (e.g., Mistral `response.id`)
-- `run_id: str` - Traceability to the run
-
-### Dependency Validation in assemble_plan()
-
-The assembler validates that all dependencies satisfy: **`1 <= dep_seq < current_task_sequence`**
-
-This prevents:
-- ❌ `dep_seq = 0` (no task with sequence 0)
-- ❌ Self-dependency (Task 2 → [2])
-- ❌ Future dependency (Task 1 → [2])
-- ❌ Dependencies beyond task count (dep_seq = 4 for 3 tasks)
-- ❌ Cycles (automatically prevented by the rule)
-
-All invalid dependencies raise `ValueError` with clear error message - **never KeyError**.
-
-### Single Assembler
-
-Both STUB and Mistral backends use **exactly the same** `assemble_plan()` function:
-- Deterministic mapping from proposal-local sequence numbers to runtime task IDs
-- All runtime-owned fields assigned by assembler, not by LLM
-- Authoritative `Plan.goal` always comes from `GoalInput.goal`
-- Runtime task IDs follow pattern: `TASK-001`, `TASK-002`, `TASK-003`, ...
-
 ---
 
-## Workflow-Level Tests
+## Milestone 3 - Executor + Execution Verification
 
-Both Milestone 1 and Milestone 2 have real workflow-level tests using Mistral Workflows testing utilities:
+### Key Features
 
-| Workflow | Test | Backend | Status |
-|----------|------|---------|--------|
-| M1 | `test_workflow_level_execution_with_test_worker` | STUB | ✅ |
-| M2 | `test_workflow_level_execution_with_test_worker` | STUB | ✅ |
+- **Executor Stub**: Deterministic stub executor that produces `ExecutorOutput` (CLAIM/RESULT) with 0 model API calls
+- **ExecutorOutput is separate from Evidence**: Executor produces claims, which are converted to EvidenceRecord with provenance validation
+- **Provenance Validation**: Before converting ExecutorOutput to EvidenceRecord, validate:
+  - `executor_output.task_id == expected_task_id`
+  - `executor_output.metadata.task_id == expected_task_id`
+  - `executor_output.metadata.run_id == expected_run_id`
+- **Evidence Conversion**: Deterministic conversion of ExecutorOutput to EvidenceRecord(s):
+  - If `task.expected_evidence` is empty: create one fallback evidence with kind `executor_output`
+  - Otherwise: create one EvidenceRecord per declared expected evidence kind
+  - Uses deterministic safe IDs (ordinal counters) while keeping original evidence kind as data
+- **Task-Level Verification**: Verifies task execution using:
+  - authoritative `run_id`
+  - `ChildTask`
+  - `list[EvidenceRecord]`
+  - Evidence must match BOTH: `evidence.run_id == authoritative run_id` AND `evidence.task_id == task.task_id`
+  - Requires ALL declared expected evidence kinds to be present
+- **State Persistence**: All state transitions persisted to filesystem:
+  - `prepare_task_activity`: Sets task RUNNING, active_task_id, persists state + plan
+  - `finalize_task_activity`: Sets task PASSED/FAILED, clears active_task_id, persists evidence + verification result
 
-Both tests use:
-- `create_test_worker` to start a real worker
-- `temporal_env.client.start_workflow(...)` to execute through the API
-- `asyncio.wait_for(handle.result(), ...)` for result waiting
-- All activities properly registered
-- No paid API calls (STUB backend)
+### Workflow Control Flow (M3)
+
+```
+Workflow Entry Point
+    \u2193
+Validate configuration (executor_backend must be STUB for M3)
+    \u2193
+Create/normalize input
+    \u2193
+Planner activity (Mistral or Stub backend)
+    \u2193
+Persist initial state (PLANNED \u2192 RUNNING)
+    \u2193
+Find first eligible task (PENDING \u2192 READY)
+    \u2193
+Prepare task (READY \u2192 RUNNING, set active_task_id, persist state)
+    \u2193
+Execute task (produces ExecutorOutput)
+    \u2193
+Validate ExecutorOutput provenance
+    \u2193
+Convert ExecutorOutput to EvidenceRecord(s)
+    \u2193
+Verify task execution
+    \u2193
+Finalize task (PASSED/FAILED, clear active_task_id, persist)
+    \u2193
+Persist final state
+    \u2193
+Return structured result
+```
+
+### Key Invariants Proven by M3
+
+- **Exactly ONE task is executed**
+- **After execution**: executed task = PASSED or FAILED, other tasks remain PENDING
+- **RunState remains RUNNING** (not transitioned to PASSED/FAILED)
+- **All state transitions use transition API**
+- **Evidence is separate from ExecutorOutput**
+- **Verifier receives EvidenceRecord, not ExecutorOutput**
+- **ExecutorOutput provenance validated before evidence conversion**
+- **Evidence must match both run_id AND task_id**
+- **All expected evidence kinds must be present**
+
+### M3 Evidence Model
+
+For deterministic M3 stub execution:
+- Evidence is runtime-captured deterministic stub evidence
+- NOT yet independent real-world proof
+- Future real Executors should provide independently observable evidence (test output, filesystem state, diffs, tool output, etc.)
 
 ---
 
 ## Test Results
 
 ```
-202 passed, 3 skipped, 388 warnings
+260 passed, 3 skipped, 634 warnings
 make check: All checks passed! (ruff, mypy, semgrep)
 ```
 
@@ -233,23 +216,41 @@ make check: All checks passed! (ruff, mypy, semgrep)
 - `tests/test_mistral_live.py` - Live smoke tests (opt-in only)
 - `Makefile` - Added test target, expanded check scope
 
+### Milestone 3
+- `src/fsasm/models.py` - ExecutorBackend, ExecutorConfig, ExecutorMetadata, ExecutorOutput
+- `src/fsasm/executor.py` - ExecutorStub with deterministic execution
+- `src/fsasm/executor_activities.py` - All executor activities:
+  - `execute_task_activity` - Execute task with STUB backend
+  - `validate_executor_output_provenance_activity` - Provenance validation
+  - `convert_executor_output_to_evidence_activity` - Convert to EvidenceRecord(s)
+  - `verify_task_execution_activity` - Task-level verification
+  - `prepare_task_activity` - Prepare task (RUNNING status, persist)
+  - `finalize_task_activity` - Finalize task (PASSED/FAILED, persist)
+- `src/fsasm/errors.py` - ProvenanceValidationError
+- `src/workflows/fsasm_milestone_three.py` - M3 workflow
+- `tests/test_executor.py` - Executor models and stub tests (19 tests)
+- `tests/test_executor_activities.py` - Executor activity tests (19 tests)
+- `tests/test_fsasm_milestone_three.py` - M3 workflow tests + workflow-level test with create_test_worker (20 tests)
+
 ---
 
-## What's Next (Milestone 3)
+## What's Next (Milestone 4)
 
 The following are **NOT** implemented yet (per AGENTS.md scope):
 
-- Executor + execution verification
 - Bounded retry + Human Gate
 - Context Builder / retrieval
 - Local coding worker
 - Model routing and fine-tuning
+
+**Explicit statement**: Retries and Human Gate remain Milestone 4. M3 proves exactly ONE task execution with PENDING -> READY -> RUNNING -> PASSED/FAILED path.
 
 ---
 
 ## Commit History
 
 ```
+[M3 commits will be added here]
 fc8addf fix: restore M2 workflow-level test, fix Makefile duplicate test target, fix UTF-8 in live tests, update IMPLEMENTATION_SUMMARY.md
 a845ffc fix: final M2 cleanup - remove duplicate test, update Makefile .PHONY, remove direct-run live workflow test, update IMPLEMENTATION_SUMMARY.md
 7c7a6c5 fix: M2 fix-pass - address all acceptance criteria
@@ -269,4 +270,4 @@ e9f8588 feat: add Mistral Workflows integration test with evidence validation
 
 > **The LLM may propose, interpret, generate and request actions. It must not be the sole authority for deterministic state, permissions, verification, retry limits or completion.**
 
-✅ **SATISFIED**: All deterministic control remains in code. Domain rules enforce all state transitions and validations. LLM provides semantic proposals only (PlannerProposal for Mistral, deterministic tasks for STUB). Both backends use the same deterministic assembler.
+\u2705 **SATISFIED**: All deterministic control remains in code. Domain rules enforce all state transitions and validations. LLM provides semantic proposals only (PlannerProposal for Mistral, deterministic tasks for STUB). Both backends use the same deterministic assembler. Executor produces claims that are validated and converted to evidence - the verifier receives EvidenceRecord, not ExecutorOutput.

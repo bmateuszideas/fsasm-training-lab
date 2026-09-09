@@ -99,3 +99,33 @@ class ConfigurationError(FSASMError):
         self.backend = backend
         self.missing_field = missing_field
         super().__init__(message, {"backend": backend, "missing_field": missing_field})
+
+
+class ProvenanceValidationError(FSASMError):
+    """Raised when ExecutorOutput provenance validation fails."""
+
+    def __init__(
+        self,
+        message: str,
+        expected_task_id: str,
+        actual_task_id: str,
+        expected_run_id: str,
+        actual_run_id: str,
+        check_type: str,
+    ) -> None:
+        self.message = message
+        self.expected_task_id = expected_task_id
+        self.actual_task_id = actual_task_id
+        self.expected_run_id = expected_run_id
+        self.actual_run_id = actual_run_id
+        self.check_type = check_type
+        super().__init__(
+            message,
+            {
+                "expected_task_id": expected_task_id,
+                "actual_task_id": actual_task_id,
+                "expected_run_id": expected_run_id,
+                "actual_run_id": actual_run_id,
+                "check_type": check_type,
+            },
+        )

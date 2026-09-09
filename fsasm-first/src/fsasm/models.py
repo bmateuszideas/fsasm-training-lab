@@ -21,6 +21,14 @@ class PlannerBackend(str, Enum):
     MISTRAL = "mistral"
 
 
+class ExecutorBackend(str, Enum):
+    """Available executor backends."""
+
+    STUB = "stub"
+    LOCAL = "local"
+    MISTRAL = "mistral"
+
+
 class TaskStatus(str, Enum):
     """Status of a ChildTask in the FS-ASM state machine."""
 
@@ -147,6 +155,75 @@ class PlannerConfig(BaseModel):
     )
     temperature: float = Field(
         default=0.0, ge=0.0, le=2.0, description="Sampling temperature."
+    )
+
+
+class ExecutorConfig(BaseModel):
+    """Serializable executor configuration for workflow input."""
+
+    backend: ExecutorBackend = Field(
+        ..., description="Selected backend: 'stub', 'local', or 'mistral'."
+    )
+    model_name: str | None = Field(
+        default=None,
+        description="Model name (required for backend='mistral' or 'local').",
+    )
+    model_version: str | None = Field(default=None, description="Model version.")
+    max_tokens: int = Field(
+        default=4096, ge=1, description="Maximum tokens for LLM response."
+    )
+    temperature: float = Field(
+        default=0.0, ge=0.0, le=2.0, description="Sampling temperature."
+    )
+
+
+class ExecutorMetadata(BaseModel):
+    """
+    Executor metadata for observability - explicitly tied to run_id and task_id.
+
+    Contains all required observability fields:
+    - provider, requested/resolved model
+    - model_call_count (0 for stub)
+    - token usage (None if not available)
+    - run_id and task_id for traceability
+    """
+
+    run_id: str = Field(..., description="The run_id this metadata belongs to.")
+    task_id: str = Field(..., description="The task_id this metadata belongs to.")
+    provider: str = Field(
+        ..., description="Provider name: 'stub', 'local', or 'mistral'."
+    )
+    requested_model: str | None = Field(
+        default=None, description="Requested model name (None for stub)."
+    )
+    resolved_model: str | None = Field(
+        default=None, description="Actually resolved model name."
+    )
+    model_version: str | None = Field(
+        default=None, description="Model version (if available)."
+    )
+    model_call_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of model API calls made (0=stub).",
+    )
+    executor_invocation_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of executor invocations.",
+    )
+    input_tokens: int | None = Field(
+        default=None, ge=0, description="Input tokens used (None if not available)."
+    )
+    output_tokens: int | None = Field(
+        default=None, ge=0, description="Output tokens used (None if not available)."
+    )
+    total_tokens: int | None = Field(
+        default=None, ge=0, description="Total tokens used (None if not available)."
+    )
+    provider_request_id: str | None = Field(
+        default=None,
+        description="Provider-specific request ID.",
     )
 
 
@@ -423,6 +500,54 @@ class PlannerOutput(BaseModel):
     metadata: PlannerMetadata = Field(
         ..., description="Observability metadata for this planning operation."
     )
+
+
+class ExecutorOutput(BaseModel):
+    """
+    Complete executor output - the claim/result produced by the executor.
+
+    This is a CLAIM/RESULT, not Evidence and not Verification.
+    ExecutorOutput is separate from EvidenceRecord and VerificationResult.
+
+    The verifier MUST NOT receive ExecutorOutput directly.
+    ExecutorOutput must be converted to EvidenceRecord with provenance validation.
+    """
+
+    task_id: str = Field(..., description="The task_id this output belongs to.")
+    run_id: str = Field(..., description="The run_id this output belongs to.")
+    result: str = Field(..., description="The result/claim produced by the executor.")
+    metadata: ExecutorMetadata = Field(
+        ..., description="Observability metadata for this execution."
+    )
+
+    @field_validator("task_id", "run_id", "result")
+    @classmethod
+    def text_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text cannot be empty")
+        return v.strip()
+
+    def validate_provenance(self, expected_task_id: str, expected_run_id: str) -> bool:
+        """
+        Validate that this ExecutorOutput matches expected provenance.
+
+        Checks:
+        - executor_output.task_id == expected_task_id
+        - executor_output.metadata.task_id == expected_task_id
+        - executor_output.metadata.run_id == expected_run_id
+
+        Args:
+            expected_task_id: The expected task_id.
+            expected_run_id: The expected run_id.
+
+        Returns:
+            True if all provenance checks pass.
+        """
+        return (
+            self.task_id == expected_task_id
+            and self.metadata.task_id == expected_task_id
+            and self.metadata.run_id == expected_run_id
+        )
 
 
 class RunState(BaseModel):
