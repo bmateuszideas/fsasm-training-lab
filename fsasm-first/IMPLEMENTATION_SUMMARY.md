@@ -1,14 +1,15 @@
-# FS-ASM Implementation Summary - Milestone 1, 2 & 3
+# FS-ASM Implementation Summary - Milestone 1, 2, 3 & 4
 
 ## Overview
 
-This document summarizes the implementation of **FS-ASM Milestone 1** (deterministic stub planner), **Milestone 2** (real Mistral Planner integration), and **Milestone 3** (Executor + execution verification for ONE eligible ChildTask).
+This document summarizes the implementation of **FS-ASM Milestone 1** (deterministic stub planner), **Milestone 2** (real Mistral Planner integration), **Milestone 3** (Executor + execution verification for ONE eligible ChildTask), and **Milestone 4** (Bounded Retry + Human Gate).
 
 ## Status
 
 - **Milestone 1**: CLOSED \u2705
 - **Milestone 2**: CLOSED \u2705
 - **Milestone 3**: CLOSED \u2705
+- **Milestone 4**: CLOSED \u2705
 
 ## What Was Built
 
@@ -216,6 +217,13 @@ make check: All checks passed! (ruff, mypy, semgrep)
 - `tests/test_mistral_live.py` - Live smoke tests (opt-in only)
 - `Makefile` - Added test target, expanded check scope
 
+### Milestone 4
+- `src/workflows/fsasm_milestone_four.py` - M4 workflow with bounded retry + Human Gate
+- `src/fsasm/executor_activities.py` - New activities:
+  - `check_retry_budget_activity` - Check if task can retry
+  - `transition_to_needs_human_activity` - Transition task to NEEDS_HUMAN with logging
+- `tests/test_fsasm_milestone_four.py` - M4 workflow tests including WorkflowInput validation, activity tests, retry logic tests, Human Gate tests, RunStatus transition tests
+
 ### Milestone 3
 - `src/fsasm/models.py` - ExecutorBackend, ExecutorConfig, ExecutorMetadata, ExecutorOutput
 - `src/fsasm/executor.py` - ExecutorStub with deterministic execution
@@ -254,22 +262,87 @@ With the following invariants:
 - Durable state correctness: state.json and plan.json always agree
 ---
 
-## What's Next (Milestone 4)
+## What's Next (Milestone 5)
 
 The following are **NOT** implemented yet (per AGENTS.md scope):
 
-- Bounded retry + Human Gate
 - Context Builder / retrieval
 - Local coding worker
 - Model routing and fine-tuning
 
-**Explicit statement**: Retries and Human Gate remain Milestone 4. M3 proves exactly ONE task execution with PENDING -> READY -> RUNNING -> PASSED/FAILED path.
+**Explicit statement**: Retries and Human Gate are implemented in Milestone 4. M3 proves exactly ONE task execution with PENDING -> READY -> RUNNING -> PASSED/FAILED path. M4 extends this with bounded retry and Human Gate escalation.
+
+---
+
+## Milestone 4 Implementation
+
+### Key Features
+
+- **Bounded Retry**: Tasks can retry up to `max_retries_per_task` times (configurable, default=2)
+- **Human Gate**: When retry budget is exhausted, tasks transition to `NEEDS_HUMAN` status
+- **Retry Loop**: FAILED -> READY (retry) -> RUNNING -> FAILED/NEEDS_HUMAN
+- **State Persistence**: All retry attempts and Human Gate invocations are persisted
+- **Workflow Configuration**: `max_retries_per_task` parameter controls retry behavior
+
+### Workflow Control Flow (M4)
+
+```
+Workflow Entry Point
+    \u2193
+Validate configuration (executor_backend must be STUB for M4)
+    \u2193
+Create/normalize input
+    \u2193
+Planner activity (Mistral or Stub backend)
+    \u2193
+Persist initial state (PLANNED \u2192 RUNNING)
+    \u2193
+Find first eligible task (PENDING \u2192 READY)
+    \u2193
+Prepare task (READY \u2192 RUNNING, set active_task_id, persist state)
+    \u2193
+Execute task (produces ExecutorOutput)
+    \u2193
+Validate ExecutorOutput provenance
+    \u2193
+Convert ExecutorOutput to EvidenceRecord(s)
+    \u2193
+Verify task execution
+    \u2193
+If PASS: Finalize task (PASSED, clear active_task_id, persist)
+    \u2193
+If FAIL: Check retry budget
+        \u251c\u2500\u2500 Can retry: Transition to READY, increment attempt, loop back
+        \u2514\u2500\u2500 Exhausted: Transition to NEEDS_HUMAN (Human Gate)
+    \u2193
+Persist final state
+    \u2193
+Return structured result
+```
+
+### Key Invariants Proven by M4
+
+- **Bounded retry**: Tasks can retry at most `max_retries_per_task` times
+- **Human Gate escalation**: When retry budget exhausted, task transitions to NEEDS_HUMAN
+- **NEEDS_HUMAN is terminal**: No outgoing transitions from NEEDS_HUMAN
+- **RunState reflects Human Gate**: If any task is NEEDS_HUMAN, RunState becomes NEEDS_HUMAN
+- **Evidence preserved**: All retry attempts and Human Gate decisions are logged
+- **Atomic state updates**: State and plan always agree, persisted atomically
+
+### M4 Evidence Model
+
+- Retry attempts are logged with attempt number and reason
+- Human Gate invocation creates evidence with reason
+- Final execution summary includes retry count and Human Gate status
 
 ---
 
 ## Commit History
 
 ```
+# M4 Commit Chain
+[NEW] Implement Milestone 4 - Bounded Retry + Human Gate
+
 # M3 Commit Chain
 4e8927e fix: address remaining 3 M3 audit issues - RUNNING SEMANTICS, ACTIVITY SERIALIZATION/EVIDENCE COUNT, DOMAIN VERIFIER BOUNDARY
 9fb3c95 fix: address remaining 4 M3 audit issues - required backends, .gitignore, VerificationSpec satisfaction, duplicate persistence fix
