@@ -266,10 +266,8 @@ async def persist_initial_state_activity(
 
     # Set task.max_attempts from planner config or default
     # For M4, we use the workflow's max_retries_per_task + 1 as the authoritative budget
-    # But we set a default here that will be overridden by the workflow
-    for task in plan.tasks:
-        if task.max_attempts == 3:  # Default value
-            task.max_attempts = 10  # Will be set properly by workflow
+    # The authoritative max_attempts is set by set_task_max_attempts_activity before first persistence
+    # No hack needed - the workflow will set it properly
 
     # Create initial run state with PLANNED status
     state = RunState(
@@ -963,6 +961,7 @@ class FsasmMilestoneFourWorkflow:
 
     def __init__(self):
         self.human_decision: HumanDecision | None = None
+        self.human_decision_consumed: bool = False
 
     @workflows.workflow.signal(
         name="human_decision",
@@ -980,6 +979,7 @@ class FsasmMilestoneFourWorkflow:
             action=signal_data.action,
             reason=signal_data.reason,
         )
+        self.human_decision_consumed = False
 
     @workflows.workflow.entrypoint
     async def run(self, input: WorkflowInput) -> WorkflowOutput:
@@ -1116,14 +1116,21 @@ class FsasmMilestoneFourWorkflow:
                         # DO NOT add to completed_task_ids - NEEDS_HUMAN is NOT completed
                         plan = state.plan if state.plan is not None else plan
 
+                        # Clear the workflow-local pending decision before waiting
+                        # A previous RETRY_ONCE must never satisfy a later wait_condition()
+                        self.human_decision_consumed = True
+                        self.human_decision = None
+
                         # Set waiting flag and wait for signal
                         # Wait for human decision signal
                         await workflows.workflow.wait_condition(
                             lambda: self.human_decision is not None
                         )
 
-                        # Get the decision
+                        # Get the decision and clear it immediately
+                        # Consume Human Gate signals exactly once
                         decision = self.human_decision
+                        self.human_decision = None
 
                         if decision is not None:
                             # Validate and apply human decision through domain/activity code

@@ -878,8 +878,9 @@ class TestScenarioAWorker:
                 for e in persisted_evidence
                 if isinstance(e.payload, dict) and e.payload.get("attempt") == 2
             ]
-            # At least one evidence record per attempt
-            assert len(attempt_1_evidence) > 0 or len(attempt_2_evidence) > 0
+            # Prove evidence exists for both attempt 1 AND attempt 2, not either one
+            assert len(attempt_1_evidence) > 0, "No evidence found for attempt 1"
+            assert len(attempt_2_evidence) > 0, "No evidence found for attempt 2"
 
             # Verify verification results for both attempts
             # Verification results are saved as JSONL in run.log.jsonl
@@ -1379,6 +1380,247 @@ class TestEdgeCases:
         assert task.status == TaskStatus.NEEDS_HUMAN
         assert state.status == RunStatus.NEEDS_HUMAN
         assert state.active_task_id is None
+
+
+# =============================================================================
+# WORKER-LEVEL TESTS - Regression: RETRY_ONCE authorizes exactly one additional execution
+# =============================================================================
+
+
+class TestRetryOnceRegressionWorker:
+    """
+    Regression test: RETRY_ONCE authorizes exactly one additional execution.
+
+    This is the critical test case from the external review.
+
+    total initial max_attempts = 1
+    Stub always fails
+    attempt 1 FAIL -> Human Gate #1
+    observe persisted NEEDS_HUMAN
+    send RETRY_ONCE
+    attempt 2 FAIL
+    workflow MUST enter and remain at Human Gate #2
+    verify attempt=2, max_attempts=2 and no attempt 3 occurs without another signal
+    only then send a new ABORT signal to finish the test
+
+    This proves RETRY_ONCE authorizes exactly one additional execution.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_runtime(self):
+        """Clean up runtime directory before and after each test."""
+        persistence = RuntimePersistence()
+        persistence.cleanup_all()
+        yield
+        persistence.cleanup_all()
+
+    @pytest.mark.asyncio
+    async def test_retry_once_authorizes_exactly_one_additional_execution(
+        self, temporal_env
+    ):
+        """
+        Regression test: RETRY_ONCE authorizes exactly one additional execution.
+
+        total initial max_attempts = 1
+        Stub always fails
+        attempt 1 FAIL -> Human Gate #1
+        observe persisted NEEDS_HUMAN
+        send RETRY_ONCE
+        attempt 2 FAIL
+        workflow MUST enter and remain at Human Gate #2
+        verify attempt=2, max_attempts=2 and no attempt 3 occurs without another signal
+        only then send a new ABORT signal to finish the test
+        """
+        from mistralai.workflows.testing import create_test_worker
+        from datetime import timedelta
+
+        WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=15)
+        test_run_id = "test-fsasm-m4-retry-once-regression"
+
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=[
+                create_input_activity,
+                validate_config_activity,
+                plan_activity,
+                persist_initial_state_activity,
+                set_task_max_attempts_activity,
+                find_next_ready_task_activity,
+                prepare_task_activity,
+                execute_task_activity,
+                validate_executor_output_provenance_activity,
+                convert_executor_output_to_evidence_activity,
+                verify_task_execution_activity,
+                finalize_task_activity,
+                check_retry_budget_activity,
+                persist_failure_state_activity,
+                persist_retry_state_activity,
+                transition_to_needs_human_activity,
+                validate_and_apply_human_decision_activity,
+                persist_final_m4_state_activity,
+            ],
+        ):
+            # Execute workflow with max_retries=0 (1 total attempt), always fail
+            handle = await temporal_env.client.start_workflow(
+                "fsasm-milestone-four",
+                {
+                    "goal": "Test RETRY_ONCE regression",
+                    "planner_backend": "stub",
+                    "executor_backend": "stub",
+                    "max_retries_per_task": 0,
+                    "stub_fail_first_n_attempts": 999,
+                    "run_id": test_run_id,
+                },
+                id=test_run_id,
+                task_queue="test-task-queue",
+                execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
+            )
+
+            # Wait for workflow to reach NEEDS_HUMAN state (Human Gate #1)
+            persistence = RuntimePersistence()
+
+            max_wait = 10
+            observed_needs_human_1 = False
+            for _ in range(max_wait * 10):
+                await asyncio.sleep(0.1)
+                try:
+                    loaded_state = persistence.load_run_state(test_run_id)
+                    loaded_plan = persistence.load_plan(test_run_id)
+                    if (
+                        loaded_state is not None
+                        and loaded_state.status == RunStatus.NEEDS_HUMAN
+                        and loaded_plan is not None
+                        and loaded_plan.tasks[0].status == TaskStatus.NEEDS_HUMAN
+                        and loaded_state.active_task_id is None
+                        and loaded_plan.tasks[0].attempt == 1
+                        and loaded_plan.tasks[0].max_attempts == 1
+                    ):
+                        observed_needs_human_1 = True
+                        break
+                except Exception:
+                    continue
+
+            assert observed_needs_human_1, (
+                "Human Gate #1 state was not observed before first signal"
+            )
+
+            # Send RETRY_ONCE signal
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    reason="Give it one more try",
+                ),
+            )
+
+            # Wait for workflow to reach NEEDS_HUMAN state again (Human Gate #2)
+            # This proves RETRY_ONCE authorized exactly one additional execution
+            observed_needs_human_2 = False
+            for _ in range(max_wait * 10):
+                await asyncio.sleep(0.1)
+                try:
+                    loaded_state = persistence.load_run_state(test_run_id)
+                    loaded_plan = persistence.load_plan(test_run_id)
+                    if (
+                        loaded_state is not None
+                        and loaded_state.status == RunStatus.NEEDS_HUMAN
+                        and loaded_plan is not None
+                        and loaded_plan.tasks[0].status == TaskStatus.NEEDS_HUMAN
+                        and loaded_state.active_task_id is None
+                        and loaded_plan.tasks[0].attempt == 2
+                        and loaded_plan.tasks[0].max_attempts == 2
+                    ):
+                        observed_needs_human_2 = True
+                        break
+                except Exception:
+                    continue
+
+            assert observed_needs_human_2, (
+                "Human Gate #2 state was not observed after RETRY_ONCE - workflow did not enter NEEDS_HUMAN again"
+            )
+
+            # Verify that attempt=2 and max_attempts=2, and no attempt 3 occurred
+            loaded_plan = persistence.load_plan(test_run_id)
+            assert loaded_plan.tasks[0].attempt == 2, "Attempt should be exactly 2"
+            assert loaded_plan.tasks[0].max_attempts == 2, "max_attempts should be exactly 2"
+
+            # Now send ABORT signal to finish the test
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.ABORT,
+                    reason="No more retries",
+                ),
+            )
+
+            # Wait for completion
+            result = await asyncio.wait_for(
+                handle.result(), timeout=10
+            )
+
+            # Verify structured result
+            assert isinstance(result, dict)
+            assert result["run_id"] == test_run_id
+            assert result["status"] == "FAILED"
+            assert result["human_gate_invoked"] is True
+            assert result["success"] is False
+
+            # Verify TASK-001 FAILED
+            assert "TASK-001" in result["failed_task_ids"]
+            assert "TASK-001" not in result["passed_task_ids"]
+
+            # Verify TASK-002 and TASK-003 remain PENDING
+            assert "TASK-002" not in result["executed_task_ids"]
+            assert "TASK-003" not in result["executed_task_ids"]
+
+            # Verify final persisted state
+            loaded_state = persistence.load_run_state(test_run_id)
+            loaded_plan = persistence.load_plan(test_run_id)
+
+            assert loaded_state is not None
+            assert loaded_state.status == RunStatus.FAILED
+            assert loaded_state.active_task_id is None
+            assert "TASK-001" in loaded_state.failed_task_ids
+
+            assert loaded_plan is not None
+            assert loaded_plan.tasks[0].status == TaskStatus.FAILED
+            assert loaded_plan.tasks[0].attempt == 2
+            assert loaded_plan.tasks[0].max_attempts == 2
+            assert loaded_plan.tasks[1].status == TaskStatus.PENDING
+            assert loaded_plan.tasks[2].status == TaskStatus.PENDING
+
+            # Verify Human Gate audit evidence persisted for both gates
+            persisted_evidence = persistence.load_all_evidence(test_run_id)
+            human_gate_audit = [
+                e for e in persisted_evidence if e.kind == "human_gate_audit"
+            ]
+            # Should have 2 human gate audit entries: RETRY_ONCE and ABORT
+            assert len(human_gate_audit) == 2
+
+            retry_audit = [e for e in human_gate_audit if e.payload.get("action") == "RETRY_ONCE"]
+            abort_audit = [e for e in human_gate_audit if e.payload.get("action") == "ABORT"]
+            assert len(retry_audit) == 1
+            assert len(abort_audit) == 1
+
+            # Verify evidence for both failed attempts is persisted
+            run_log_path = DEFAULT_RUNTIME_DIR / "runs" / test_run_id / "run.log.jsonl"
+            verification_count = 0
+            if run_log_path.exists():
+                with open(run_log_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                entry = json.loads(line)
+                                if "status" in entry and entry.get("status") == "FAIL":
+                                    verification_count += 1
+                            except json.JSONDecodeError:
+                                continue
+            # Should have 2 FAIL verification results (attempt 1 and attempt 2)
+            assert verification_count >= 2
 
 
 # =============================================================================
