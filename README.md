@@ -16,24 +16,28 @@
 | [`fsasm-first/AGENTS.md`](fsasm-first/AGENTS.md) | Engineering contract and historical milestones; see current status for completed stages |
 | [`fsasm-first/IMPLEMENTATION_SUMMARY.md`](fsasm-first/IMPLEMENTATION_SUMMARY.md) | Milestone implementation reference, not live status after later PRs |
 | [`fsasm-first/CURRENT_DEVELOPMENT_ANCHOR.md`](fsasm-first/CURRENT_DEVELOPMENT_ANCHOR.md) | Dated historical running record, including superseded pause/LLMC instructions; **not an active command list** |
+| [`.vibe/`](.vibe/) | Project-scoped Mistral Vibe coding skill and its use/trust instructions; **not runtime configuration or live project status** |
 | [`stare dokumenty rozwojowe fsasm/`](stare%20dokumenty%20rozwojowe%20fsasm/) | Deduplicated historical FS-ASM specifications and audits; preserve as research evidence |
 
 ## Branches — do not confuse names with freshness
 
-- **`Fsasm-experimental`**: active implementation/integration for the runtime, M4 stabilization in progress. New changes go via focused task branches and PRs, not direct changes to `main`.
-- **`main`**: GitHub default, but currently older/diverged for the runtime and contains historical LLMC benchmark work. It is **not** the latest release of the experimental runtime. Integration is a separate decision.
-- **`Fsasm-llmc-testingbranch`**: frozen research baseline. LLMC is deferred and not integrated into FS-ASM.
-- Other old `vibe/*` and check branches are cleanup candidates only after verifying ancestry/reference and explicit authorization. No automatic deletion, merge, force push or default-branch change.
+At the 2026-09-16 branch check, three persistent refs remained. Always recheck GitHub for task branches and later changes:
 
-See [branch policy](fsasm-first/docs/BRANCH_POLICY.md) for a dated inventory and process. GitHub may move after this document is written: always check the refs.
+- **`Fsasm-experimental`**: active implementation/integration for the runtime, M4 stabilization in progress. New changes go via focused task branches and PRs, not direct changes to `main`.
+- **`main`**: GitHub default, but older/diverged for the runtime and contains historical LLMC benchmark work. It is **not** the latest release of the experimental runtime. Integration is a separate decision.
+- **`__noop_check__`**: legacy technical branch, retained until a separate ancestry/reference check and explicit deletion approval.
+
+The former `Fsasm-llmc-testingbranch` and old `vibe/*` branches were deleted. Their historical material and commits are not instructions to recreate them. No automatic deletion, merge, force push or default-branch change.
+
+See [branch policy](fsasm-first/docs/BRANCH_POLICY.md) for its dated inventory and procedure.
 
 ## Implementation boundary — 16 September 2026 snapshot
 
-M1, M2 and M3 are CLOSED. M4 has implemented bounded retries and a Workflows Human Gate; **M4 remains in stabilization, not CLOSED**. M5 Context Builder is NOT STARTED. The M4 executor is a deterministic STUB and performs exactly one selected ChildTask, possibly with retries; no real coding executor, independent test-artifact proof, complete plan execution or operational run recovery is implemented. Current detailed scope, accepted fixes and open F3–F8 tasks are in [PROJECT_STATUS](fsasm-first/PROJECT_STATUS.md). This is dated, not a substitute for checking current code.
+M1, M2 and M3 are CLOSED. M4 has implemented bounded retries and a Workflows Human Gate; **M4 remains in stabilization, not CLOSED**. F8 finalizer hardening was merged through PR #17; consult [PROJECT_STATUS](fsasm-first/PROJECT_STATUS.md) for verified fixes and the remaining queue. M5 Context Builder is NOT STARTED. The M4 executor is a deterministic STUB and performs exactly one selected ChildTask, possibly with retries; no real coding executor, independent test-artifact proof, complete plan execution or operational run recovery is implemented. This is dated, not a substitute for checking current code.
 
 ## Development entry
 
-For a fresh coding model: read `PROJECT_STATUS.md`, confirm branch/HEAD, then read `docs/CURRENT_FSASM_MODEL.md`, stable rules in `AGENTS.md`, the documentation map and only the relevant files/tests for the approved atomic task. Read `fsasm-first/.agents/skills/workflows/SKILL.md` before touching the Mistral SDK. Do not start M5 or LLMC work from superseded instructions.
+For a fresh coding model: read root `AGENTS.md`, `fsasm-first/PROJECT_STATUS.md`, confirm branch/HEAD, then read the branch policy, documentation map, architecture and stable rules, followed by the relevant files/tests for an explicitly approved atomic task. Read `fsasm-first/.agents/skills/workflows/SKILL.md` before touching the Mistral SDK. Vibe sessions may use [the project coding skill](.vibe/skills/fsasm-vibe-coding/SKILL.md) for generic implementation/debugging/handoff method; it does **not** authorize additional work or replace the Workflows SDK reference.
 
 For installation, worker and test commands see [`fsasm-first/README.md`](fsasm-first/README.md). Do not use production runtime data as a pytest fixture; several legacy tests need further isolation.
 
