@@ -185,6 +185,10 @@ async def persist_plan_and_state_activity(
     # Transition CREATED -> PLANNED in activity (not workflow body)
     transition_run(state, RunStatus.PLANNED)
 
+    # F4: explicitly reserve the run directory before any write. A duplicate
+    # run_id is rejected here rather than silently overwriting existing state.
+    persistence.create_run(run_id)
+
     # Save plan
     persistence.save_plan(plan)
 

@@ -114,6 +114,14 @@ class TestWorkflowRegistration:
 class TestWorkflowExecution:
     """Tests for workflow execution."""
 
+    @pytest.fixture(autouse=True)
+    def cleanup_runtime(self):
+        """Clean up the shared runtime directory before and after each test."""
+        persistence = RuntimePersistence()
+        persistence.cleanup_all()
+        yield
+        persistence.cleanup_all()
+
     @pytest.mark.asyncio
     async def test_workflow_creates_run_id(self):
         """Test that workflow creates a run_id when not provided."""
@@ -281,21 +289,34 @@ class TestWorkflowExecution:
 
     @pytest.mark.asyncio
     async def test_workflow_deterministic(self):
-        """Test that workflow execution is deterministic."""
+        """Test that workflow execution is deterministic.
+
+        Determinism means the same goal produces the same plan structure
+        (task count and task titles). F4 forbids reusing the same run_id to
+        create a second run, so the two executions use distinct generated
+        run_ids and compare the deterministic structural outputs rather than
+        the run_id-derived identifiers.
+        """
         wf = fsasm_milestone_three.FsasmMilestoneThreeWorkflow()
-        input = fsasm_milestone_three.WorkflowInput(
+        input1 = fsasm_milestone_three.WorkflowInput(
             goal="Test goal",
-            run_id="deterministic-run",
+            planner_backend=PlannerBackend.STUB,
+            executor_backend=ExecutorBackend.STUB,
+        )
+        input2 = fsasm_milestone_three.WorkflowInput(
+            goal="Test goal",
             planner_backend=PlannerBackend.STUB,
             executor_backend=ExecutorBackend.STUB,
         )
 
-        result1 = await wf.run(input)
-        result2 = await wf.run(input)
+        result1 = await wf.run(input1)
+        result2 = await wf.run(input2)
 
-        assert result1["run_id"] == result2["run_id"]
-        assert result1["plan_id"] == result2["plan_id"]
         assert result1["task_count"] == result2["task_count"]
+        assert result1["executed_task_id"] == result2["executed_task_id"]
+        assert result1["executed_task_status"] == result2["executed_task_status"]
+        assert result1["verification_status"] == result2["verification_status"]
+        assert result1["success"] == result2["success"]
 
     @pytest.mark.asyncio
     async def test_workflow_accepts_stub_planner(self):

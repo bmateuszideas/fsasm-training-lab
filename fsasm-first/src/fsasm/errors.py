@@ -79,6 +79,32 @@ class PlanValidationError(FSASMError):
         super().__init__(message, {"plan_id": plan_id})
 
 
+class RunAlreadyExistsError(FSASMError):
+    """Raised when an explicit new-run creation targets a run_id that already exists.
+
+    This is the F4 identity boundary: separating *creating* a new run from
+    *accessing* or *resuming* an existing run. A duplicate creation request
+    (same run_id, whether with the same or a different goal) must fail through
+    this explicit domain error rather than silently overwriting existing
+    state, plan, evidence or log artifacts.
+    """
+
+    def __init__(self, message: str, run_id: str | None = None) -> None:
+        self.run_id = run_id
+        super().__init__(message, {"run_id": run_id})
+
+
+class UnsupportedResumeError(FSASMError):
+    """Raised when a resume/recovery operation is requested but unsupported.
+
+    The system must reject an unsupported resume operation rather than quietly
+    starting a new run over an existing run_id (F4)."""
+
+    def __init__(self, message: str, run_id: str | None = None) -> None:
+        self.run_id = run_id
+        super().__init__(message, {"run_id": run_id})
+
+
 class InvalidIdentifierError(FSASMError):
     """Raised when an untrusted filesystem identifier is unsafe.
 

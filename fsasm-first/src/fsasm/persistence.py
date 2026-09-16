@@ -14,7 +14,11 @@ from fsasm.models import (
     RunState,
     VerificationResult,
 )
-from fsasm.errors import InvalidIdentifierError, PersistenceError
+from fsasm.errors import (
+    InvalidIdentifierError,
+    PersistenceError,
+    RunAlreadyExistsError,
+)
 
 
 # =============================================================================
@@ -304,6 +308,123 @@ class RuntimePersistence:
         path = run_dir / DEFAULT_RUN_LOG_FILE
         _ensure_contained(path, run_dir)
         return path
+
+    # =========================================================================
+    # F4 RUN-CREATION BOUNDARY
+    # =========================================================================
+    #
+    # ``create_run`` is the explicit new-run creation boundary. It atomically
+    # reserves the run directory using exclusive creation (``mkdir`` with
+    # ``exist_ok=False``) so that two concurrent local creation attempts for the
+    # same ``run_id`` cannot both succeed, and an existing run cannot be silently
+    # reinitialized. F5's identifier validation and symlink containment are
+    # applied first. A successful ``create_run`` establishes exclusive ownership
+    # of the run directory; subsequent normal internal writes to an established
+    # run (``save_plan`` / ``save_run_state`` / ...) are NOT creation operations
+    # and remain unaffected.
+    #
+    # The reservation marker file (``.fsasm-run``) records that this directory is
+    # a legitimately created FS-ASM run (rather than a partially initialized or
+    # foreign directory), so recovery can distinguish a crashed creation from a
+    # clean existing run (F3).
+
+    _RESERVATION_MARKER = ".fsasm-run"
+
+    def create_run(self, run_id: str) -> Path:
+        """Atomically reserve the run directory for a new run.
+
+        This is the F4 identity boundary: it separates *creating* a new run
+        from *accessing* or *resuming* an existing run. It MUST be called before
+        the first ``save_plan`` / ``save_run_state`` for a new run.
+
+        Args:
+            run_id: The run identifier to create. Validated by the F5 policy.
+
+        Returns:
+            The reserved run directory ``Path``.
+
+        Raises:
+            InvalidIdentifierError: If ``run_id`` is path-unsafe (F5).
+            RunAlreadyExistsError: If the run directory already exists
+                (whether fully or partially initialized), so a duplicate
+                creation cannot silently overwrite existing state, plan,
+                evidence or log history.
+        """
+        run_dir = self._get_run_dir(run_id)
+        # Exclusive creation: race-free on a local filesystem. ``exist_ok=False``
+        # raises ``FileExistsError`` if the directory already exists, even if it
+        # was created concurrently between the F5 check and this call.
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise RunAlreadyExistsError(
+                f"Run '{run_id}' already exists; cannot create a new run with "
+                f"this run_id (use resume/load to access an existing run)",
+                run_id=run_id,
+            ) from exc
+        # Write the reservation marker atomically so the directory is a
+        # legitimately created FS-ASM run. This marker survives partial
+        # initialization and crash recovery (F3).
+        marker = run_dir / self._RESERVATION_MARKER
+        try:
+            self._atomic_write_marker(marker, {"run_id": run_id})
+        except Exception:
+            # If the marker write fails, remove the empty reservation so the
+            # creation can be retried cleanly rather than leaving a half-created
+            # run that blocks future creation.
+            import shutil
+
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise
+        return run_dir
+
+    def _atomic_write_marker(self, path: Path, data: dict[str, Any]) -> None:
+        """Write the reservation marker atomically."""
+        try:
+            temp_fd, temp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            try:
+                with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, path)
+            except Exception:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+        except Exception as exc:
+            raise PersistenceError(
+                message=f"Failed to write reservation marker {path}: {exc}",
+                path=str(path),
+                operation="create_run_marker",
+            ) from exc
+
+    def is_run_initialized(self, run_id: str) -> bool:
+        """Return True if the run directory exists AND was created via ``create_run``.
+
+        A directory that merely exists but lacks the reservation marker is a
+        partially initialized or foreign directory, not a legitimately created
+        run. This distinction supports F3 crash recovery and F4 duplicate
+        detection.
+        """
+        run_dir = self._get_run_dir(run_id)
+        return run_dir.exists() and (run_dir / self._RESERVATION_MARKER).exists()
+
+    def assert_run_initialized(self, run_id: str) -> None:
+        """Raise ``PersistenceError`` if the run was not created via ``create_run``.
+
+        Used by internal write paths to guard against writes to a partially
+        initialized or foreign directory that should not be treated as a run.
+        """
+        if not self.is_run_initialized(run_id):
+            raise PersistenceError(
+                message=(
+                    f"Run '{run_id}' is not initialized; create_run() must be "
+                    f"called before any save operation for a new run"
+                ),
+                path=str(self._get_run_dir(run_id)),
+                operation="assert_run_initialized",
+            )
 
     # =========================================================================
     # ATOMIC WRITE HELPERS

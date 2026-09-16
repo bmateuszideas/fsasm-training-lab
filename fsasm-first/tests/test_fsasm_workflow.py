@@ -16,6 +16,14 @@ from mistralai.workflows.testing import create_test_worker
 class TestFsasmMilestoneOneWorkflow:
     """Tests for the FS-ASM milestone one workflow."""
 
+    @pytest.fixture(autouse=True)
+    def cleanup_runtime(self):
+        """Clean up the shared runtime directory before and after each test."""
+        persistence = RuntimePersistence()
+        persistence.cleanup_all()
+        yield
+        persistence.cleanup_all()
+
     @pytest.fixture
     def workflow_module(self):
         """Import the workflow module."""

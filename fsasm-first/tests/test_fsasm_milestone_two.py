@@ -10,6 +10,7 @@ from fsasm.models import (
     PlannerBackend,
     RunStatus,
 )
+from fsasm.persistence import RuntimePersistence
 
 # Import for workflow module loading
 from src.workflows.fsasm_milestone_two import (
@@ -82,6 +83,14 @@ class TestWorkflowInput:
 
 class TestFsasmMilestoneTwoWorkflow:
     """Tests for FS-ASM Milestone Two workflow."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_runtime(self):
+        """Clean up the shared runtime directory before and after each test."""
+        persistence = RuntimePersistence()
+        persistence.cleanup_all()
+        yield
+        persistence.cleanup_all()
 
     @pytest.mark.asyncio
     async def test_workflow_creates_run_id_with_stub(self, workflow_module):
