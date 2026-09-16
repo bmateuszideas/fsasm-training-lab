@@ -109,27 +109,47 @@ def isolated_runtime(tmp_path, monkeypatch):
     }
 
     class _CapturingPersistence:
-        """Delegating wrapper that freezes the first state/plan snapshot."""
+        """Delegating wrapper that captures the first successfully persisted
+        state/plan snapshot by reading it back from disk, not by copying the
+        in-memory argument."""
 
         def __init__(self, *args, **kwargs):
             kwargs.setdefault("runtime_dir", runtime_dir)
             self._inner = original(*args, **kwargs)
 
         def save_run_state(self, state):
-            if captures["first_state"] is None:
-                captures["first_state"] = type(state).model_validate_json(
-                    state.model_dump_json()
-                )
-                captures["first_state_run_id"] = state.run_id
-            return self._inner.save_run_state(state)
+            # 1. Perform the real write first.
+            result = self._inner.save_run_state(state)
+            # 2. Capture only after a successful write, only for the test run,
+            #    only once, and read the persisted file back from disk.
+            if (
+                captures["first_state"] is None
+                and state.run_id == captures.get("target_run_id")
+            ):
+                loaded = self._inner.load_run_state(state.run_id)
+                if loaded is not None:
+                    captures["first_state"] = type(loaded).model_validate_json(
+                        loaded.model_dump_json()
+                    )
+                    captures["first_state_run_id"] = loaded.run_id
+            return result
 
         def save_plan(self, plan):
-            if captures["first_plan"] is None:
-                captures["first_plan"] = type(plan).model_validate_json(
-                    plan.model_dump_json()
-                )
-                captures["first_plan_run_id"] = plan.run_id
-            return self._inner.save_plan(plan)
+            # 1. Perform the real write first.
+            result = self._inner.save_plan(plan)
+            # 2. Capture only after a successful write, only for the test run,
+            #    only once, and read the persisted file back from disk.
+            if (
+                captures["first_plan"] is None
+                and plan.run_id == captures.get("target_run_id")
+            ):
+                loaded = self._inner.load_plan(plan.run_id)
+                if loaded is not None:
+                    captures["first_plan"] = type(loaded).model_validate_json(
+                        loaded.model_dump_json()
+                    )
+                    captures["first_plan_run_id"] = loaded.run_id
+            return result
 
         def __getattr__(self, name):
             return getattr(self._inner, name)
@@ -171,6 +191,8 @@ async def test_initial_persistence_ordering_and_log_consistency(
     from mistralai.workflows.testing import create_test_worker
 
     test_run_id = "test-s2-initial-persistence"
+    # Tell the capture proxy to only freeze snapshots for this run.
+    isolated_runtime["captures"]["target_run_id"] = test_run_id
 
     async with create_test_worker(
         temporal_env,
