@@ -1,0 +1,249 @@
+{
+  "config": {
+    "repo": "/workspace/github__bmateuszideas__fsasm-training-lab/fsasm-first",
+    "est_tokens_per_span": 350,
+    "path": "mechanical (FTS/grep fallback, no embeddings)"
+  },
+  "questions": [
+    {
+      "id": "Q1",
+      "query": "durable Human Gate implementation",
+      "rationale": "Where is the durable Human Gate implemented? (natural phrasing)",
+      "elapsed_sec": 0.7289150369997515,
+      "n_spans": 1,
+      "n_files": 1,
+      "est_context_tokens": 350,
+      "returned_paths": [
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [],
+      "missed_gold": [
+        "Q1.G1(fsasm_milestone_four.py:transition_to_needs_human)",
+        "Q1.G2(fsasm_milestone_four.py:receive_human_decision)",
+        "Q1.G3(fsasm_milestone_four.py:validate_and_apply_human_decision)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q1s",
+      "query": "transition_to_needs_human",
+      "rationale": "Where is the durable Human Gate implemented? (symbolic phrasing)",
+      "elapsed_sec": 0.7188757479998458,
+      "n_spans": 16,
+      "n_files": 3,
+      "est_context_tokens": 5600,
+      "returned_paths": [
+        "tests/test_fsasm_milestone_four.py",
+        "src/workflows/fsasm_milestone_four.py",
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [
+        "Q1s.G1(fsasm_milestone_four.py:transition_to_needs_human)"
+      ],
+      "missed_gold": [],
+      "error": null
+    },
+    {
+      "id": "Q2",
+      "query": "execution retry budget control",
+      "rationale": "What controls the execution retry budget? (natural phrasing)",
+      "elapsed_sec": 0.7061398410005495,
+      "n_spans": 1,
+      "n_files": 1,
+      "est_context_tokens": 350,
+      "returned_paths": [
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [],
+      "missed_gold": [
+        "Q2.G1(models.py:can_retry)",
+        "Q2.G2(models.py:retry_count_remaining)",
+        "Q2.G3(fsasm_milestone_four.py:check_retry_budget)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q2s",
+      "query": "can_retry",
+      "rationale": "What controls the execution retry budget? (symbolic phrasing)",
+      "elapsed_sec": 0.6992654469995614,
+      "n_spans": 20,
+      "n_files": 3,
+      "est_context_tokens": 7000,
+      "returned_paths": [
+        "tests/test_models.py",
+        "tests/test_fsasm_milestone_four.py",
+        "tests/test_transitions.py"
+      ],
+      "hit_gold": [
+        "Q2s.G1(models.py:can_retry)"
+      ],
+      "missed_gold": [],
+      "error": null
+    },
+    {
+      "id": "Q3",
+      "query": "mutate task max_attempts",
+      "rationale": "Find every relevant path that can mutate task.max_attempts. (natural phrasing)",
+      "elapsed_sec": 0.709243007000623,
+      "n_spans": 1,
+      "n_files": 1,
+      "est_context_tokens": 350,
+      "returned_paths": [
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [],
+      "missed_gold": [
+        "Q3.G1(models.py:max_attempts)",
+        "Q3.G2(transitions.py:max_attempts)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q3s",
+      "query": "max_attempts",
+      "rationale": "Find every relevant path that can mutate task.max_attempts. (symbolic phrasing)",
+      "elapsed_sec": 0.7033120729993243,
+      "n_spans": 20,
+      "n_files": 2,
+      "est_context_tokens": 7000,
+      "returned_paths": [
+        "tests/test_models.py",
+        "tests/test_fsasm_milestone_four.py"
+      ],
+      "hit_gold": [
+        "Q3s.G1(models.py:max_attempts)"
+      ],
+      "missed_gold": [
+        "Q3s.G2(transitions.py:max_attempts)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q4",
+      "query": "RETRY_ONCE behavior proof tests",
+      "rationale": "Which tests prove RETRY_ONCE behavior? (natural phrasing)",
+      "elapsed_sec": 0.7014459160000115,
+      "n_spans": 1,
+      "n_files": 1,
+      "est_context_tokens": 350,
+      "returned_paths": [
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [],
+      "missed_gold": [
+        "Q4.G1(test_fsasm_milestone_four.py:retry_once)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q4s",
+      "query": "retry_once",
+      "rationale": "Which tests prove RETRY_ONCE behavior? (symbolic phrasing)",
+      "elapsed_sec": 0.7202467219995015,
+      "n_spans": 6,
+      "n_files": 3,
+      "est_context_tokens": 2100,
+      "returned_paths": [
+        "tests/test_fsasm_milestone_four.py",
+        "src/workflows/fsasm_milestone_four.py",
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [
+        "Q4s.G1(test_fsasm_milestone_four.py:retry_once)"
+      ],
+      "missed_gold": [],
+      "error": null
+    },
+    {
+      "id": "Q5",
+      "query": "run transition PLANNED to RUNNING",
+      "rationale": "Which code transitions a run from PLANNED to RUNNING? (natural phrasing)",
+      "elapsed_sec": 0.7042037729988806,
+      "n_spans": 1,
+      "n_files": 1,
+      "est_context_tokens": 350,
+      "returned_paths": [
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [],
+      "missed_gold": [
+        "Q5.G1(transitions.py:PLANNED)",
+        "Q5.G2(fsasm_milestone_four.py:persist_initial_state)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q5s",
+      "query": "persist_initial_state",
+      "rationale": "Which code transitions a run from PLANNED to RUNNING? (symbolic phrasing)",
+      "elapsed_sec": 0.7007190059994173,
+      "n_spans": 20,
+      "n_files": 4,
+      "est_context_tokens": 7000,
+      "returned_paths": [
+        "tests/test_fsasm_milestone_three.py",
+        "tests/test_fsasm_milestone_four.py",
+        "tests/test_executor_activities.py",
+        "src/workflows/fsasm_milestone_four.py"
+      ],
+      "hit_gold": [
+        "Q5s.G1(fsasm_milestone_four.py:persist_initial_state)"
+      ],
+      "missed_gold": [],
+      "error": null
+    },
+    {
+      "id": "Q6",
+      "query": "repeated Human Gate decisions evidence",
+      "rationale": "What code and tests are relevant to repeated Human Gate decisions? (natural phrasing)",
+      "elapsed_sec": 0.7046317029999045,
+      "n_spans": 1,
+      "n_files": 1,
+      "est_context_tokens": 350,
+      "returned_paths": [
+        "llmc-benchmark/bench_harness.py"
+      ],
+      "hit_gold": [],
+      "missed_gold": [
+        "Q6.G1(fsasm_milestone_four.py:evidence_id)",
+        "Q6.G2(persistence.py:save_evidence)"
+      ],
+      "error": null
+    },
+    {
+      "id": "Q6s",
+      "query": "evidence_id",
+      "rationale": "What code and tests are relevant to repeated Human Gate decisions? (symbolic phrasing)",
+      "elapsed_sec": 0.6996388690004096,
+      "n_spans": 20,
+      "n_files": 6,
+      "est_context_tokens": 7000,
+      "returned_paths": [
+        "tests/test_models.py",
+        "tests/test_verifier.py",
+        "tests/test_fsasm_workflow.py",
+        "tests/test_fsasm_milestone_four.py",
+        "tests/test_persistence.py",
+        "tests/test_executor_activities.py"
+      ],
+      "hit_gold": [
+        "Q6s.G1(fsasm_milestone_four.py:evidence_id)"
+      ],
+      "missed_gold": [],
+      "error": null
+    }
+  ],
+  "aggregate": {
+    "total_retrieval_sec": 8.49663714199778,
+    "total_spans": 108,
+    "total_est_context_tokens": 37800,
+    "gold_recall": 0.3,
+    "whole_repo_baseline_tokens": 231000,
+    "context_reduction_pct": 0.8363636363636364,
+    "natural_recall": 0.0,
+    "symbolic_recall": 0.8571428571428571,
+    "natural_tokens": 2100,
+    "symbolic_tokens": 35700
+  }
+}

@@ -10,3 +10,8 @@ build/
 
 # FS-ASM runtime data
 **/runtime/
+
+# LLMC index artifacts (local-only, not source of truth)
+.llmc/
+.rag/
+llmc.toml
