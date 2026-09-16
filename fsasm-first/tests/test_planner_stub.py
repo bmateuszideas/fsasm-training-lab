@@ -1,7 +1,5 @@
 """Tests for FS-ASM Planner Stub."""
 
-import os, sys
-
 import pytest
 
 from fsasm.models import GoalInput, Plan, TaskStatus
