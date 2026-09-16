@@ -1084,13 +1084,29 @@ class FsasmMilestoneFourWorkflow:
 
     Key invariants:
     - Only TASK-001 is executed; TASK-002 and TASK-003 remain PENDING
+    - A successful M4 path is successful completion of the M4 TASK-001 path,
+      NOT completion of all three tasks or the user's original goal
+    - The Executor is a deterministic STUB, not a real coding Executor
     - attempt increments exactly once on READY -> RUNNING (BEFORE Executor execution)
     - FAILED -> READY does NOT increment attempt
     - All state transitions use transition API or human-authorized domain operations
     - Evidence is separate from ExecutorOutput
     - Verifier receives EvidenceRecord, not ExecutorOutput
     - NEEDS_HUMAN state is persisted for BOTH task AND run BEFORE waiting for signal
-    - Human decisions are typed, validated, and persisted
+    - Human decisions are typed, validated, persisted and identity-bound:
+      each decision targets one gate occurrence (gate_id) and is idempotent
+      (decision_id); the first accepted decision wins and a conflicting later
+      signal cannot overwrite it; a stale (wrong-gate) decision is rejected
+    - Authoritative persistence (F3): state.json (with embedded plan) is the
+      single source of truth; plan.json is a derived view, NEVER a competing
+      authority. A transition is not durably committed until the authoritative
+      snapshot is committed via commit_run_state (state.json first, then
+      plan.json). This is NOT a fully transactional store: evidence/log writes
+      are separate supplementary artifacts, not part of the same atomic
+      transaction as state.json
+    - Run identity (F4): create_run is the explicit new-run boundary; a
+      duplicate run_id is rejected and existing artifacts are never silently
+      overwritten
     - success field represents successful completion of M4 task path (not run == PASSED)
     - ALL filesystem I/O happens in activities, not in workflow code
     """
