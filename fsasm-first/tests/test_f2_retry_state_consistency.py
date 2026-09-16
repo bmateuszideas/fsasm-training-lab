@@ -31,6 +31,7 @@ from fsasm.models import (
 from fsasm.persistence import RuntimePersistence
 from fsasm.transitions import transition_task
 
+import workflows.fsasm_milestone_four as m4_module
 from workflows.fsasm_milestone_four import persist_retry_state_activity
 
 
@@ -91,15 +92,28 @@ def _build_failed_state(run_id: str):
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_runtime():
-    persistence = RuntimePersistence()
-    persistence.cleanup_all()
-    yield
-    persistence.cleanup_all()
+def _isolated_runtime(tmp_path, monkeypatch):
+    """Redirect persistence to an isolated tmp_path directory.
+
+    The activity under test instantiates ``RuntimePersistence()`` itself, so we
+    monkeypatch the ``RuntimePersistence`` symbol in the workflow module to a
+    factory that always points at this test's ``tmp_path``. This never touches
+    the global ``./runtime`` directory or any real run data.
+    """
+    runtime_dir = tmp_path / "runtime"
+
+    def _factory(*args, **kwargs):
+        kwargs.setdefault("runtime_dir", runtime_dir)
+        return RuntimePersistence(*args, **kwargs)
+
+    monkeypatch.setattr(m4_module, "RuntimePersistence", _factory)
+    yield runtime_dir
 
 
 @pytest.mark.asyncio
-async def test_persist_retry_state_keeps_state_json_and_plan_json_consistent():
+async def test_persist_retry_state_keeps_state_json_and_plan_json_consistent(
+    _isolated_runtime,
+):
     """F2: state.json.plan and plan.json must agree after retry persistence.
 
     Arguments are forced through an independent JSON round-trip so that
@@ -130,8 +144,8 @@ async def test_persist_retry_state_keeps_state_json_and_plan_json_consistent():
         state_indep, plan_indep, task_indep, "retry"
     )
 
-    # Read back what was actually persisted.
-    persistence = RuntimePersistence()
+    # Read back what was actually persisted, from the same isolated directory.
+    persistence = RuntimePersistence(runtime_dir=_isolated_runtime)
     loaded_state = persistence.load_run_state(run_id)
     loaded_plan = persistence.load_plan(run_id)
     assert loaded_state is not None
@@ -159,7 +173,9 @@ async def test_persist_retry_state_keeps_state_json_and_plan_json_consistent():
 
 
 @pytest.mark.asyncio
-async def test_persist_retry_state_does_not_increment_attempt():
+async def test_persist_retry_state_does_not_increment_attempt(
+    _isolated_runtime,
+):
     """F2 invariants: FAILED->READY does not increment attempt; the next
     READY->RUNNING increments exactly once."""
     run_id = "f2-attempt"
@@ -176,7 +192,7 @@ async def test_persist_retry_state_does_not_increment_attempt():
 
     # Reload and simulate the next READY -> RUNNING transition on the persisted
     # authoritative task. It must increment attempt exactly once.
-    persistence = RuntimePersistence()
+    persistence = RuntimePersistence(runtime_dir=_isolated_runtime)
     loaded_state = persistence.load_run_state(run_id)
     loaded_plan = persistence.load_plan(run_id)
     assert loaded_state is not None and loaded_plan is not None
