@@ -44,7 +44,7 @@ The three persistent refs above were confirmed after user cleanup and before thi
 | S4 | Stale M4 comments/docstrings | OPEN |
 | F3 | Crash-consistent multi-file snapshot and recovery | OPEN |
 | F4 | Explicit new-run creation vs reuse/resumption of `run_id` | OPEN |
-| F5 | Safe identifiers in filesystem paths | **IMPLEMENTED \u2014 READY FOR EXTERNAL REVIEW** (task branch `task/f5-filesystem-path-safety`, PR pending) |
+| F5 | Safe identifiers in filesystem paths | **IMPLEMENTED \u2014 READY FOR EXTERNAL REVIEW** ([PR #19](https://github.com/bmateuszideas/fsasm-training-lab/pull/19), task branch `task/f5-filesystem-path-safety`) \u2014 under external review |
 | F6/F7 | Remaining evidence/gate identity and duplicate/stale/multiple signal handling | OPEN beyond S1 |
 
 The OPEN items are previously documented findings/risks, **not** proof that every reproducer was rerun in this session. Verify a selected issue against current source/tests before code edits; no single skill, review or model summary can silently authorize its implementation.
@@ -59,7 +59,7 @@ Tested security scenarios (new `tests/test_f5_filesystem_path_safety.py`, 225 te
 
 ## NEXT ACTION — no new runtime task approved by this file
 
-**F8 has been merged and is DONE; M4 is still OPEN.** Select **one** of S4, F3, F4, F5 or F6/F7, verify its failure mechanism in current code and agree on bounded scope/reproducer/acceptance criteria with the user **before** implementation. No other stabilization item is currently authorized by this status alone. Do not begin M5, reactivate LLMC, synchronize `main` or remove `__noop_check__` as an automatic next step. Adding a Vibe process skill is a separate documentation/tooling change, not M4 completion.
+**F8 has been merged and is DONE; M4 is still OPEN.** **F5 is IMPLEMENTED \u2014 READY FOR EXTERNAL REVIEW under [PR #19](https://github.com/bmateuszideas/fsasm-training-lab/pull/19) and is NOT an unselected task; do not reimplement it.** Select **one** of S4, F3, F4 or F6/F7, verify its failure mechanism in current code and agree on bounded scope/reproducer/acceptance criteria with the user **before** implementation. No other stabilization item is currently authorized by this status alone. Do not begin M5, reactivate LLMC, synchronize `main` or remove `__noop_check__` as an automatic next step. Adding a Vibe process skill is a separate documentation/tooling change, not M4 completion.
 
 ## Fresh-agent entry and handoff
 
