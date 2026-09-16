@@ -98,10 +98,11 @@ An independent GPT-6 review and the subsequent external review loop considered t
 
 These items are **known technical debt / review cleanup**, not forgotten work:
 
-1. **Human Gate audit EvidenceRecord IDs**
-   - Current audit evidence IDs should be checked for uniqueness across repeated Human Gate decisions on the same run/task.
-   - A repeated `RETRY_ONCE` must never overwrite an earlier audit record.
-   - Prefer deterministic uniqueness based on attempt or gate sequence.
+1. **Human Gate audit EvidenceRecord IDs** — DONE (S1, PR pending)
+   - The `RETRY_ONCE` audit `evidence_id` in `validate_and_apply_human_decision_activity` was `evidence-human-gate-retry-{run_id}-{task_id}`, with no discriminator, so a consecutive `RETRY_ONCE` on the same run/task received the same id and overwrote the earlier audit record under a shared evidence path.
+   - Fixed by appending the failing attempt: `evidence-human-gate-retry-{run_id}-{task_id}-attempt-{task.attempt}`. `RETRY_ONCE` does not reset `task.attempt`, so the attempt at decision time uniquely and deterministically identifies each consecutive `RETRY_ONCE` on the same run/task. The id is stable across replays of the same event and does not collide with the `ABORT` audit id (`evidence-human-gate-abort-...`). No random UUID or wall clock is used.
+   - Regression test: `tests/test_s1_human_gate_evidence_uniqueness.py` (worker-level, isolated `tmp_path` persistence). It drives two consecutive `RETRY_ONCE` decisions through the real worker and proves both audit records survive as distinct files with distinct ids and preserved per-decision content, plus the closing `ABORT` and the attempt sequence 1→2→3.
+   - Resolved scope (partial F6): uniqueness and non-overwrite of consecutive `RETRY_ONCE` audit records on the same run/task, and non-collision with the `ABORT` audit id. NOT resolved under F6: signal deduplication / idempotent re-application of the same Human Gate signal (that is the separate F7 scope) and audit payload completeness for the `attempt`/`max_attempts` before/after a decision (that is the separate S3 scope). F6 is therefore not marked DONE as a whole.
 
 2. **Human Gate audit payload completeness**
    - Preserve explicit attempt and `max_attempts` before and after a human-authorized decision where applicable.
@@ -301,7 +302,9 @@ These items are derived from the 2026-09-09 audit (section 4) plus the worker-co
 
 ## 13. Current stop point (updated 2026-09-16)
 
-> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; Task F2 (retry state.json/plan.json consistency) is done; Task S2 (initial persistence ordering & run log consistency) is done; the next atomic tasks are the remaining open items in the queue below. M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
+> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; Task F2 (retry state.json/plan.json consistency) is done; Task S2 (initial persistence ordering & run log consistency) is done; Task S1 (Human Gate audit EvidenceRecord ID uniqueness) is done; the next atomic tasks are the remaining open items in the queue below. M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
+
+**Merged stabilization history:** S0 — merged PR #7; F2 — merged PR #8; S2 — merged PR #9 (HEAD `e4a93ef`). S1 is on branch `vibe/s1-human-gate-evidence-uniqueness-9726de` (draft PR, not merged). M4 as a whole is NOT closed.
 
 ---
 
@@ -331,17 +334,27 @@ See section 12 for the full record. DONE on branch `vibe/worker-activity-name-co
 - **Regression test:** `tests/test_s2_initial_persistence_ordering.py`. Fails on the unpatched code (`m4_run_started.status == RUNNING`) and passes after the fix.
 - **Status:** DONE on branch `vibe/s2-initial-persistence-ordering-b6d6c2`. Resolves ONLY S2; does NOT resolve F3 (proving correct init ordering is not a transactional multi-file write), and does not touch S1/S3/S4/F4/F5/F6/F7/F8.
 
+### Task S1-HUMAN-GATE-EVIDENCE-UNIQUENESS — Human Gate audit EvidenceRecord ID uniqueness (DONE 2026-09-16)
+
+- **Scope / defect:** `validate_and_apply_human_decision_activity` in `src/workflows/fsasm_milestone_four.py` built the `RETRY_ONCE` audit `evidence_id` as `evidence-human-gate-retry-{run_id}-{task_id}` with no discriminator. Two consecutive `RETRY_ONCE` decisions on the same run/task received the same id, and because persistence stores evidence under a path derived from `evidence_id`, the second write overwrote the earlier audit record (the first decision's `reason` was lost).
+- **Minimal production fix:** The `RETRY_ONCE` audit `evidence_id` now appends the failing attempt: `evidence-human-gate-retry-{run_id}-{task_id}-attempt-{task.attempt}`. `RETRY_ONCE` does not reset `task.attempt`, so the attempt at decision time equals the execution attempt that just failed and uniquely, deterministically identifies each consecutive `RETRY_ONCE` on the same run/task. The id is stable across replays of the same event, uses no random UUID or wall clock, and does not collide with the `ABORT` audit id (`evidence-human-gate-abort-{run_id}-{task_id}`). Other evidence category ids (`planner_proposal`, `m4_execution_summary`, per-attempt executor evidence, the `ABORT` audit) are unchanged.
+- **Invariants preserved:** `RETRY_ONCE`/`ABORT`/`attempt`/`max_attempts` semantics unchanged; `attempt` increments only on `READY -> RUNNING`; `RETRY_ONCE` authorizes exactly one additional attempt; no change to other evidence category ids.
+- **Reproduction:** Before the fix, the worker-level reproducer observed only one `RETRY_ONCE` audit record surviving on disk (the second overwrote the first, carrying the second decision's `reason`), confirming the collision.
+- **Regression test:** `tests/test_s1_human_gate_evidence_uniqueness.py` (worker-level, isolated `tmp_path` persistence via monkeypatch of `RuntimePersistence` in every activity module; the global `./runtime` is never touched). It drives two consecutive `RETRY_ONCE` decisions through the real worker (`max_retries_per_task=0`, `stub_fail_first_n_attempts=999`) with controlled synchronization on durable `NEEDS_HUMAN` state keyed by attempt number, then a closing `ABORT`. It asserts: exactly two `human_gate_audit`/`RETRY_ONCE` records; same run_id/task_id; distinct `evidence_id`; both files exist; first record's content unchanged after the second decision (different `reason` values detect overwrite, not just name collision); each record keeps its own `reason`; two `human_decision_retry_once` log entries; attempts 1→2→3; each `RETRY_ONCE` authorizes exactly one more attempt; the `ABORT` closes the workflow with `FAILED`; no collision with the `ABORT` audit id; and `result.evidence_count == actual persisted evidence count`.
+- **Resolved scope (partial F6):** uniqueness and non-overwrite of consecutive `RETRY_ONCE` audit records on the same run/task, and non-collision with the `ABORT` audit id.
+- **NOT resolved (remain open):** S3 (audit payload completeness for `attempt`/`max_attempts` before/after a decision); F3 (multi-file transactionality); F4 (run_id reuse); F5 (path identifier validation); F7 (signal deduplication / idempotent re-application of the same Human Gate signal); F8 (finalizer contract); the remainder of F6 beyond the specific case solved here. F6 is NOT marked DONE as a whole.
+- **Status:** DONE on branch `vibe/s1-human-gate-evidence-uniqueness-9726de`. Resolves ONLY S1 (and the corresponding narrow part of F6); does NOT resolve S3, F3, F4, F5, F7, F8, or the rest of F6.
+
 ### Open backlog (separate atomic tasks, not started)
 
 These items remain open and require their own atomic patches. They are NOT done.
 
-- **S1 — Human Gate audit EvidenceRecord ID uniqueness** (open). See section 12. Repeated `RETRY_ONCE` must never overwrite an earlier audit record.
 - **S3 — Human Gate audit payload completeness** (open). See section 12.
 - **S4 — Stale M4 comments/docstrings alignment** (open). See section 12.
 - **F3 — Multi-file snapshot transactionality** (open). `state.json` and `plan.json` consistency after an activity does NOT imply a transactional write of both files. A crash between the two writes can still leave them inconsistent. Separate atomic task; do not claim it is solved by F2.
 - **F4 — run_id reuse** (open). Separate atomic task.
 - **F5 — identifier validation in paths** (open). Separate atomic task.
-- **F6/F7 — evidence and Human Gate identifier contracts** (open). Overlaps with S1/S3; coordinate to avoid duplicate fixes. Separate atomic task.
+- **F6/F7 — evidence and Human Gate identifier contracts** (open). Overlaps with S1/S3. S1 resolved only the narrow case of consecutive-`RETRY_ONCE` audit id uniqueness/non-overwrite and non-collision with the `ABORT` id; F6 as a whole and F7 (signal deduplication) remain open. Separate atomic task.
 - **F8 — finalizer contract** (open). Separate atomic task.
 
 The historical code baseline `c47f356` (section 2) is preserved as the historical M4 implementation commit; it is not changed by this stabilization work.
