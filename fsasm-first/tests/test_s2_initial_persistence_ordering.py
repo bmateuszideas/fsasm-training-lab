@@ -122,9 +122,8 @@ def isolated_runtime(tmp_path, monkeypatch):
             result = self._inner.save_run_state(state)
             # 2. Capture only after a successful write, only for the test run,
             #    only once, and read the persisted file back from disk.
-            if (
-                captures["first_state"] is None
-                and state.run_id == captures.get("target_run_id")
+            if captures["first_state"] is None and state.run_id == captures.get(
+                "target_run_id"
             ):
                 loaded = self._inner.load_run_state(state.run_id)
                 if loaded is not None:
@@ -139,9 +138,8 @@ def isolated_runtime(tmp_path, monkeypatch):
             result = self._inner.save_plan(plan)
             # 2. Capture only after a successful write, only for the test run,
             #    only once, and read the persisted file back from disk.
-            if (
-                captures["first_plan"] is None
-                and plan.run_id == captures.get("target_run_id")
+            if captures["first_plan"] is None and plan.run_id == captures.get(
+                "target_run_id"
             ):
                 loaded = self._inner.load_plan(plan.run_id)
                 if loaded is not None:
@@ -155,8 +153,12 @@ def isolated_runtime(tmp_path, monkeypatch):
             return getattr(self._inner, name)
 
     monkeypatch.setattr(m4_module, "RuntimePersistence", _CapturingPersistence)
-    monkeypatch.setattr(exec_module, "RuntimePersistence", _CapturingPersistence, raising=False)
-    monkeypatch.setattr(plan_module, "RuntimePersistence", _CapturingPersistence, raising=False)
+    monkeypatch.setattr(
+        exec_module, "RuntimePersistence", _CapturingPersistence, raising=False
+    )
+    monkeypatch.setattr(
+        plan_module, "RuntimePersistence", _CapturingPersistence, raising=False
+    )
     return {"runtime_dir": runtime_dir, "captures": captures}
 
 
@@ -285,10 +287,14 @@ async def test_initial_persistence_ordering_and_log_consistency(
     assert first_state.active_task_id is None
     # Requirement 4: all three tasks PENDING at initialization.
     for t in first_plan.tasks:
-        assert t.status == TaskStatus.PENDING, f"{t.task_id} must be PENDING in the first snapshot"
+        assert t.status == TaskStatus.PENDING, (
+            f"{t.task_id} must be PENDING in the first snapshot"
+        )
     # Requirement 1: authoritative max_attempts established before the first save.
     for t in first_plan.tasks:
-        assert t.max_attempts == 3, f"{t.task_id} max_attempts must be 3 in the first snapshot"
+        assert t.max_attempts == 3, (
+            f"{t.task_id} max_attempts must be 3 in the first snapshot"
+        )
     # Requirement 5: state.json.plan == plan.json at the first snapshot.
     for s_t, p_t in zip(first_state.plan.tasks, first_plan.tasks):
         assert s_t.status == p_t.status == TaskStatus.PENDING

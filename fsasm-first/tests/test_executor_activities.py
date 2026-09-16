@@ -85,7 +85,8 @@ class TestValidateExecutorOutputProvenanceActivity:
     @pytest.mark.asyncio
     async def test_validate_provenance_pass(self):
         """Test provenance validation passes with matching IDs."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="test-run",
             task_id="TASK-001",
@@ -107,7 +108,8 @@ class TestValidateExecutorOutputProvenanceActivity:
     @pytest.mark.asyncio
     async def test_validate_provenance_fail_output_task_id(self):
         """Test provenance validation fails with mismatched output task_id."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="test-run",
             task_id="TASK-001",
@@ -129,7 +131,8 @@ class TestValidateExecutorOutputProvenanceActivity:
     @pytest.mark.asyncio
     async def test_validate_provenance_fail_metadata_task_id(self):
         """Test provenance validation fails with mismatched metadata task_id."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="test-run",
             task_id="TASK-002",  # Mismatch with expected
@@ -151,7 +154,8 @@ class TestValidateExecutorOutputProvenanceActivity:
     @pytest.mark.asyncio
     async def test_validate_provenance_fail_metadata_run_id(self):
         """Test provenance validation fails with mismatched metadata run_id."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="different-run",  # Mismatch with expected
             task_id="TASK-001",
@@ -177,7 +181,8 @@ class TestConvertExecutorOutputToEvidenceActivity:
     @pytest.mark.asyncio
     async def test_convert_with_expected_evidence(self):
         """Test conversion with expected evidence kinds."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="test-run",
             task_id="TASK-001",
@@ -217,7 +222,8 @@ class TestConvertExecutorOutputToEvidenceActivity:
     @pytest.mark.asyncio
     async def test_convert_with_empty_expected_evidence(self):
         """Test conversion with empty expected evidence (fallback)."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="test-run",
             task_id="TASK-001",
@@ -255,7 +261,8 @@ class TestConvertExecutorOutputToEvidenceActivity:
     @pytest.mark.asyncio
     async def test_convert_evidence_ids_are_deterministic(self):
         """Test that evidence IDs are deterministic with counter."""
-        from fsasm.models import ExecutorMetadata, ExecutorOutput
+        from fsasm.models import ExecutorOutput
+
         metadata = ExecutorMetadata(
             run_id="test-run",
             task_id="TASK-001",
@@ -285,7 +292,9 @@ class TestConvertExecutorOutputToEvidenceActivity:
             output, task, 5
         )
 
-        assert evidence_records[0].evidence_id == "evidence-test-run-TASK-001-exec-005-000"
+        assert (
+            evidence_records[0].evidence_id == "evidence-test-run-TASK-001-exec-005-000"
+        )
 
 
 class TestVerifyTaskExecutionActivity:
@@ -450,7 +459,9 @@ class TestVerifyTaskExecutionActivity:
         result = await verify_task_execution_activity(run_id, task, evidence_records)
 
         assert result.status == VerificationResultStatus.FAIL
-        assert any("Missing expected evidence kinds" in c.message for c in result.checks)
+        assert any(
+            "Missing expected evidence kinds" in c.message for c in result.checks
+        )
 
     @pytest.mark.asyncio
     async def test_verify_requires_all_expected_kinds(self):

@@ -6,8 +6,6 @@ import asyncio
 from fsasm.models import (
     ExecutorBackend,
     PlannerBackend,
-    RunStatus,
-    TaskStatus,
 )
 from fsasm.persistence import RuntimePersistence
 from pydantic import ValidationError
@@ -336,7 +334,6 @@ class TestWorkflowLevelExecution:
         from mistralai.workflows.testing import create_test_worker
         from src.workflows.fsasm_milestone_three import (
             FsasmMilestoneThreeWorkflow,
-            WorkflowInput,
             create_input_activity,
             validate_config_activity,
             plan_activity,
@@ -468,9 +465,11 @@ class TestWorkflowLevelExecution:
                 (e for e in persisted_evidence if e.kind == "m3_execution_summary"),
                 None,
             )
-            assert summary_evidence is not None, "m3_execution_summary evidence not found"
-            assert (
-                summary_evidence.payload["total_evidence_count"] == len(persisted_evidence)
+            assert summary_evidence is not None, (
+                "m3_execution_summary evidence not found"
+            )
+            assert summary_evidence.payload["total_evidence_count"] == len(
+                persisted_evidence
             ), (
                 f"summary total_evidence_count {summary_evidence.payload['total_evidence_count']} != len(persisted_evidence) {len(persisted_evidence)}"
             )

@@ -17,11 +17,11 @@ import pytest
 class TestMistralLiveSmoke:
     """
     Live smoke tests with real Mistral API calls.
-    
+
     These tests are OPT-IN ONLY and require:
     1. MISTRAL_API_KEY environment variable to be set
     2. FSASM_ENABLE_LIVE_TESTS=true environment variable to be set
-    
+
     They verify that the Mistral planner integration works with real API calls.
     Only tests the planner activity directly, not full workflow execution.
     """
@@ -37,7 +37,9 @@ class TestMistralLiveSmoke:
             model_name="mistral-large-latest",
             prompt_version="v1.0",
         )
-        goal_input = GoalInput(goal="Napisz plan dla: Stwórz prostą funkcję Python do sortowania listy")
+        goal_input = GoalInput(
+            goal="Napisz plan dla: Stwórz prostą funkcję Python do sortowania listy"
+        )
 
         output = await plan_with_mistral(goal_input, config)
 

@@ -2,7 +2,14 @@
 
 import pytest
 
-from fsasm.models import ChildTask, RunState, RunStatus, TaskStatus, VerificationSpec, VerificationType
+from fsasm.models import (
+    ChildTask,
+    RunState,
+    RunStatus,
+    TaskStatus,
+    VerificationSpec,
+    VerificationType,
+)
 from fsasm.transitions import (
     transition_task,
     transition_run,
@@ -35,7 +42,9 @@ class TestTaskTransitions:
             title="Test task",
             description="Test description",
             status=status,
-            verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+            verification=VerificationSpec(
+                type=VerificationType.SCHEMA, expected="test"
+            ),
             attempt=attempt,
             max_attempts=max_attempts,
         )
@@ -323,13 +332,21 @@ class TestTransitionHelpers:
     def test_is_task_transition_allowed(self) -> None:
         """Test is_task_transition_allowed helper."""
         assert is_task_transition_allowed(TaskStatus.PENDING, TaskStatus.READY) is True
-        assert is_task_transition_allowed(TaskStatus.PENDING, TaskStatus.RUNNING) is False
+        assert (
+            is_task_transition_allowed(TaskStatus.PENDING, TaskStatus.RUNNING) is False
+        )
         assert is_task_transition_allowed(TaskStatus.READY, TaskStatus.RUNNING) is True
         assert is_task_transition_allowed(TaskStatus.RUNNING, TaskStatus.PASSED) is True
         assert is_task_transition_allowed(TaskStatus.RUNNING, TaskStatus.FAILED) is True
         assert is_task_transition_allowed(TaskStatus.FAILED, TaskStatus.READY) is True
-        assert is_task_transition_allowed(TaskStatus.FAILED, TaskStatus.NEEDS_HUMAN) is True
-        assert is_task_transition_allowed(TaskStatus.NEEDS_HUMAN, TaskStatus.READY) is False
+        assert (
+            is_task_transition_allowed(TaskStatus.FAILED, TaskStatus.NEEDS_HUMAN)
+            is True
+        )
+        assert (
+            is_task_transition_allowed(TaskStatus.NEEDS_HUMAN, TaskStatus.READY)
+            is False
+        )
 
     def test_is_run_transition_allowed(self) -> None:
         """Test is_run_transition_allowed helper."""
@@ -337,7 +354,9 @@ class TestTransitionHelpers:
         assert is_run_transition_allowed(RunStatus.PLANNED, RunStatus.RUNNING) is True
         assert is_run_transition_allowed(RunStatus.RUNNING, RunStatus.PASSED) is True
         assert is_run_transition_allowed(RunStatus.RUNNING, RunStatus.FAILED) is True
-        assert is_run_transition_allowed(RunStatus.RUNNING, RunStatus.NEEDS_HUMAN) is True
+        assert (
+            is_run_transition_allowed(RunStatus.RUNNING, RunStatus.NEEDS_HUMAN) is True
+        )
         assert is_run_transition_allowed(RunStatus.PASSED, RunStatus.RUNNING) is False
 
     def test_get_allowed_task_transitions(self) -> None:

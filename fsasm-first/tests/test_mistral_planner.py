@@ -3,14 +3,12 @@
 import json
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from fsasm.models import (
     GoalInput,
     PlannerBackend,
     PlannerConfig,
-    PlannerProposal,
-    TaskProposal,
 )
 from fsasm.planner_activities import plan_with_mistral
 from fsasm.errors import ConfigurationError
@@ -44,40 +42,42 @@ class TestPlanWithMistralActivity:
                     finish_reason="stop",
                     message=AssistantMessage(
                         role="assistant",
-                        content=json.dumps({
-                            "tasks": [
-                                {
-                                    "title": "Mistral Task 1",
-                                    "description": "Mistral Description 1",
-                                    "dependencies": [],
-                                    "verification_type": "schema",
-                                    "verification_expected": "Mistral Expected 1",
-                                    "constraints": [],
-                                    "allowed_files": [],
-                                    "expected_evidence": [],
-                                },
-                                {
-                                    "title": "Mistral Task 2",
-                                    "description": "Mistral Description 2",
-                                    "dependencies": [1],
-                                    "verification_type": "exists",
-                                    "verification_expected": "Mistral Expected 2",
-                                    "constraints": [],
-                                    "allowed_files": [],
-                                    "expected_evidence": [],
-                                },
-                                {
-                                    "title": "Mistral Task 3",
-                                    "description": "Mistral Description 3",
-                                    "dependencies": [2],
-                                    "verification_type": "custom",
-                                    "verification_expected": "Mistral Expected 3",
-                                    "constraints": [],
-                                    "allowed_files": [],
-                                    "expected_evidence": [],
-                                },
-                            ]
-                        }),
+                        content=json.dumps(
+                            {
+                                "tasks": [
+                                    {
+                                        "title": "Mistral Task 1",
+                                        "description": "Mistral Description 1",
+                                        "dependencies": [],
+                                        "verification_type": "schema",
+                                        "verification_expected": "Mistral Expected 1",
+                                        "constraints": [],
+                                        "allowed_files": [],
+                                        "expected_evidence": [],
+                                    },
+                                    {
+                                        "title": "Mistral Task 2",
+                                        "description": "Mistral Description 2",
+                                        "dependencies": [1],
+                                        "verification_type": "exists",
+                                        "verification_expected": "Mistral Expected 2",
+                                        "constraints": [],
+                                        "allowed_files": [],
+                                        "expected_evidence": [],
+                                    },
+                                    {
+                                        "title": "Mistral Task 3",
+                                        "description": "Mistral Description 3",
+                                        "dependencies": [2],
+                                        "verification_type": "custom",
+                                        "verification_expected": "Mistral Expected 3",
+                                        "constraints": [],
+                                        "allowed_files": [],
+                                        "expected_evidence": [],
+                                    },
+                                ]
+                            }
+                        ),
                     ),
                 ),
             ],
@@ -220,16 +220,33 @@ class TestPlanWithMistralActivity:
                         finish_reason="stop",
                         message=AssistantMessage(
                             role="assistant",
-                            content=json.dumps({
-                                "tasks": [
-                                    {"title": "T", "description": "D", "dependencies": [],
-                                     "verification_type": "schema", "verification_expected": "E"},
-                                    {"title": "T", "description": "D", "dependencies": [],
-                                     "verification_type": "schema", "verification_expected": "E"},
-                                    {"title": "T", "description": "D", "dependencies": [],
-                                     "verification_type": "schema", "verification_expected": "E"},
-                                ]
-                            }),
+                            content=json.dumps(
+                                {
+                                    "tasks": [
+                                        {
+                                            "title": "T",
+                                            "description": "D",
+                                            "dependencies": [],
+                                            "verification_type": "schema",
+                                            "verification_expected": "E",
+                                        },
+                                        {
+                                            "title": "T",
+                                            "description": "D",
+                                            "dependencies": [],
+                                            "verification_type": "schema",
+                                            "verification_expected": "E",
+                                        },
+                                        {
+                                            "title": "T",
+                                            "description": "D",
+                                            "dependencies": [],
+                                            "verification_type": "schema",
+                                            "verification_expected": "E",
+                                        },
+                                    ]
+                                }
+                            ),
                         ),
                     )
                 ],
@@ -285,7 +302,6 @@ class TestPlanWithMistralActivity:
     @pytest.mark.asyncio
     async def test_mistral_uses_same_assembler(self, mock_chat_completion_response):
         """Test that Mistral uses the same assembler as stub."""
-        from fsasm.planner import assemble_plan
 
         config = PlannerConfig(
             backend=PlannerBackend.MISTRAL,

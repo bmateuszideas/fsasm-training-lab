@@ -14,8 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: Fsasm-experimental
+
+      - name: Verify checkout SHA
+        run: |
+          echo "Checked out HEAD: $(git rev-parse HEAD)"
+          echo "Expected GITHUB_SHA: $GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -31,19 +35,23 @@ jobs:
 
       - name: Lint with ruff
         working-directory: ./fsasm-first
-        run: uv run ruff check src/workflows/ src/fsasm/
+        run: uv run ruff check src/workflows/ src/fsasm/ tests/
 
       - name: Format check with ruff
         working-directory: ./fsasm-first
-        run: uv run ruff format --check src/workflows/ src/fsasm/
+        run: uv run ruff format --check src/workflows/ src/fsasm/ tests/
 
   typecheck:
     name: Type Check (mypy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: Fsasm-experimental
+
+      - name: Verify checkout SHA
+        run: |
+          echo "Checked out HEAD: $(git rev-parse HEAD)"
+          echo "Expected GITHUB_SHA: $GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -66,8 +74,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: Fsasm-experimental
+
+      - name: Verify checkout SHA
+        run: |
+          echo "Checked out HEAD: $(git rev-parse HEAD)"
+          echo "Expected GITHUB_SHA: $GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -90,8 +102,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: Fsasm-experimental
+
+      - name: Verify checkout SHA
+        run: |
+          echo "Checked out HEAD: $(git rev-parse HEAD)"
+          echo "Expected GITHUB_SHA: $GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

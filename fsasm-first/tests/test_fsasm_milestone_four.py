@@ -47,27 +47,21 @@ from fsasm.models import (
     Plan,
     PlannerBackend,
     PlannerConfig,
-    PlannerMetadata,
-    PlannerOutput,
-    PlannerProposal,
     RunState,
     RunStatus,
-    TaskProposal,
     TaskStatus,
     VerificationResult,
     VerificationResultStatus,
     VerificationSpec,
     VerificationType,
 )
-from fsasm.errors import ConfigurationError
 from fsasm.persistence import RuntimePersistence, DEFAULT_RUNTIME_DIR
-from fsasm.transitions import transition_task, transition_run
+from fsasm.transitions import transition_task
 
 # Import workflow components
 from workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
     WorkflowInput,
-    WorkflowOutput,
     HumanDecisionSignal,
     create_input_activity,
     validate_config_activity,
@@ -255,9 +249,7 @@ class TestM4Activities:
     @pytest.mark.asyncio
     async def test_find_next_ready_task_skips_others(self, sample_plan):
         """Test that TASK-002 and TASK-003 are skipped."""
-        result = await find_next_ready_task_activity(
-            sample_plan, ["TASK-001"]
-        )
+        result = await find_next_ready_task_activity(sample_plan, ["TASK-001"])
         assert result is None
 
     @pytest.mark.asyncio
@@ -617,11 +609,11 @@ class TestStatePersistence:
             reason="Give it one more try",
         )
 
-        task, state, applied_decision = (
-            await validate_and_apply_human_decision_activity(
-                decision, task, state
-            )
-        )
+        (
+            task,
+            state,
+            applied_decision,
+        ) = await validate_and_apply_human_decision_activity(decision, task, state)
 
         assert task.status == TaskStatus.READY
         assert task.max_attempts == 3  # attempt was 2, so max_attempts = 2 + 1 = 3
@@ -690,11 +682,11 @@ class TestStatePersistence:
             reason="This is not working",
         )
 
-        task, state, applied_decision = (
-            await validate_and_apply_human_decision_activity(
-                decision, task, state
-            )
-        )
+        (
+            task,
+            state,
+            applied_decision,
+        ) = await validate_and_apply_human_decision_activity(decision, task, state)
 
         assert task.status == TaskStatus.FAILED
         assert state.status == RunStatus.FAILED
@@ -732,9 +724,7 @@ class TestStatePersistence:
         )
 
         with pytest.raises(Exception) as exc_info:
-            await validate_and_apply_human_decision_activity(
-                decision, task, state
-            )
+            await validate_and_apply_human_decision_activity(decision, task, state)
         assert "does not match gated task" in str(exc_info.value)
 
 
@@ -768,9 +758,7 @@ class TestScenarioAWorker:
         persistence.cleanup_all()
 
     @pytest.mark.asyncio
-    async def test_scenario_a_worker_level(
-        self, temporal_env
-    ):
+    async def test_scenario_a_worker_level(self, temporal_env):
         """
         Scenario A: Autonomous retry then PASS using real test worker.
         Uses mistralai.workflows.testing.create_test_worker.
@@ -819,9 +807,7 @@ class TestScenarioAWorker:
                 execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
             )
 
-            result = await asyncio.wait_for(
-                handle.result(), timeout=20
-            )
+            result = await asyncio.wait_for(handle.result(), timeout=20)
 
             # Verify structured result
             assert isinstance(result, dict)
@@ -862,9 +848,7 @@ class TestScenarioAWorker:
             assert loaded_plan.tasks[2].status == TaskStatus.PENDING
 
             # Verify evidence for both attempts is persisted
-            persisted_evidence = persistence.load_all_evidence(
-                result["run_id"]
-            )
+            persisted_evidence = persistence.load_all_evidence(result["run_id"])
             assert len(persisted_evidence) >= 2
 
             # Count per-attempt evidence (evidence has attempt in payload)
@@ -884,7 +868,9 @@ class TestScenarioAWorker:
 
             # Verify verification results for both attempts
             # Verification results are saved as JSONL in run.log.jsonl
-            run_log_path = DEFAULT_RUNTIME_DIR / "runs" / result["run_id"] / "run.log.jsonl"
+            run_log_path = (
+                DEFAULT_RUNTIME_DIR / "runs" / result["run_id"] / "run.log.jsonl"
+            )
             verification_count = 0
             if run_log_path.exists():
                 with open(run_log_path, "r", encoding="utf-8") as f:
@@ -893,7 +879,10 @@ class TestScenarioAWorker:
                         if line:
                             try:
                                 entry = json.loads(line)
-                                if "status" in entry and entry.get("status") in ["PASS", "FAIL"]:
+                                if "status" in entry and entry.get("status") in [
+                                    "PASS",
+                                    "FAIL",
+                                ]:
                                     verification_count += 1
                             except json.JSONDecodeError:
                                 continue
@@ -928,9 +917,7 @@ class TestScenarioBWorker:
         persistence.cleanup_all()
 
     @pytest.mark.asyncio
-    async def test_scenario_b_worker_level(
-        self, temporal_env
-    ):
+    async def test_scenario_b_worker_level(self, temporal_env):
         """
         Scenario B: Exhaustion -> Human Gate -> ABORT using real test worker.
         Tests observe NEEDS_HUMAN state before sending signal.
@@ -1023,9 +1010,7 @@ class TestScenarioBWorker:
             )
 
             # Wait for completion
-            result = await asyncio.wait_for(
-                handle.result(), timeout=10
-            )
+            result = await asyncio.wait_for(handle.result(), timeout=10)
 
             # Verify structured result
             assert isinstance(result, dict)
@@ -1066,8 +1051,7 @@ class TestScenarioBWorker:
             human_gate_audit = [
                 e
                 for e in persisted_evidence
-                if e.kind == "human_gate_audit"
-                and e.payload.get("action") == "ABORT"
+                if e.kind == "human_gate_audit" and e.payload.get("action") == "ABORT"
             ]
             assert len(human_gate_audit) == 1
             assert human_gate_audit[0].payload["task_id"] == "TASK-001"
@@ -1085,7 +1069,10 @@ class TestScenarioBWorker:
                         if line:
                             try:
                                 entry = json.loads(line)
-                                if "status" in entry and entry.get("status") in ["PASS", "FAIL"]:
+                                if "status" in entry and entry.get("status") in [
+                                    "PASS",
+                                    "FAIL",
+                                ]:
                                     verification_count += 1
                             except json.JSONDecodeError:
                                 continue
@@ -1122,9 +1109,7 @@ class TestScenarioCWorker:
         persistence.cleanup_all()
 
     @pytest.mark.asyncio
-    async def test_scenario_c_worker_level(
-        self, temporal_env
-    ):
+    async def test_scenario_c_worker_level(self, temporal_env):
         """
         Scenario C: Exhaustion -> Human Gate -> RETRY_ONCE -> PASS using real test worker.
         Tests observe NEEDS_HUMAN state before sending signal.
@@ -1215,9 +1200,7 @@ class TestScenarioCWorker:
             )
 
             # Wait for completion
-            result = await asyncio.wait_for(
-                handle.result(), timeout=10
-            )
+            result = await asyncio.wait_for(handle.result(), timeout=10)
 
             # Verify structured result
             assert isinstance(result, dict)
@@ -1280,7 +1263,10 @@ class TestScenarioCWorker:
                         if line:
                             try:
                                 entry = json.loads(line)
-                                if "status" in entry and entry.get("status") in ["PASS", "FAIL"]:
+                                if "status" in entry and entry.get("status") in [
+                                    "PASS",
+                                    "FAIL",
+                                ]:
                                     verification_count += 1
                             except json.JSONDecodeError:
                                 continue
@@ -1331,9 +1317,7 @@ class TestEdgeCases:
         planner_output = await plan_activity(goal_input, planner_config)
         plan = planner_output.plan
 
-        plan, state = await persist_initial_state_activity(
-            planner_output, goal_input
-        )
+        plan, state = await persist_initial_state_activity(planner_output, goal_input)
         # persist_initial_state_activity already transitions to RUNNING
         persistence.save_run_state(state)
 
@@ -1374,9 +1358,7 @@ class TestEdgeCases:
         assert can_retry is False  # max_attempts=1, attempt=1, exhausted
 
         # Should go straight to NEEDS_HUMAN
-        task, state = await transition_to_needs_human_activity(
-            task, state, reason
-        )
+        task, state = await transition_to_needs_human_activity(task, state, reason)
         assert task.status == TaskStatus.NEEDS_HUMAN
         assert state.status == RunStatus.NEEDS_HUMAN
         assert state.active_task_id is None
@@ -1507,9 +1489,7 @@ class TestSignalCannotBeLost:
             )
 
             # Wait for completion
-            result = await asyncio.wait_for(
-                handle.result(), timeout=10
-            )
+            result = await asyncio.wait_for(handle.result(), timeout=10)
 
             # Verify structured result
             assert isinstance(result, dict)
@@ -1546,8 +1526,7 @@ class TestSignalCannotBeLost:
             human_gate_audit = [
                 e
                 for e in persisted_evidence
-                if e.kind == "human_gate_audit"
-                and e.payload.get("action") == "ABORT"
+                if e.kind == "human_gate_audit" and e.payload.get("action") == "ABORT"
             ]
             assert len(human_gate_audit) == 1
             assert human_gate_audit[0].payload["task_id"] == "TASK-001"
@@ -1556,7 +1535,6 @@ class TestSignalCannotBeLost:
 # =============================================================================
 # WORKER-LEVEL TESTS - Regression: RETRY_ONCE authorizes exactly one additional execution
 # =============================================================================
-
 
 
 class TestRetryOnceRegressionWorker:
@@ -1716,7 +1694,9 @@ class TestRetryOnceRegressionWorker:
             # Verify that attempt=2 and max_attempts=2, and no attempt 3 occurred
             loaded_plan = persistence.load_plan(test_run_id)
             assert loaded_plan.tasks[0].attempt == 2, "Attempt should be exactly 2"
-            assert loaded_plan.tasks[0].max_attempts == 2, "max_attempts should be exactly 2"
+            assert loaded_plan.tasks[0].max_attempts == 2, (
+                "max_attempts should be exactly 2"
+            )
 
             # Now send ABORT signal to finish the test
             await handle.signal(
@@ -1729,9 +1709,7 @@ class TestRetryOnceRegressionWorker:
             )
 
             # Wait for completion
-            result = await asyncio.wait_for(
-                handle.result(), timeout=10
-            )
+            result = await asyncio.wait_for(handle.result(), timeout=10)
 
             # Verify structured result
             assert isinstance(result, dict)
@@ -1772,8 +1750,12 @@ class TestRetryOnceRegressionWorker:
             # Should have 2 human gate audit entries: RETRY_ONCE and ABORT
             assert len(human_gate_audit) == 2
 
-            retry_audit = [e for e in human_gate_audit if e.payload.get("action") == "RETRY_ONCE"]
-            abort_audit = [e for e in human_gate_audit if e.payload.get("action") == "ABORT"]
+            retry_audit = [
+                e for e in human_gate_audit if e.payload.get("action") == "RETRY_ONCE"
+            ]
+            abort_audit = [
+                e for e in human_gate_audit if e.payload.get("action") == "ABORT"
+            ]
             assert len(retry_audit) == 1
             assert len(abort_audit) == 1
 
@@ -1798,5 +1780,3 @@ class TestRetryOnceRegressionWorker:
 # =============================================================================
 # IMPORT FOR VALIDATION ERROR
 # =============================================================================
-
-from pydantic import ValidationError

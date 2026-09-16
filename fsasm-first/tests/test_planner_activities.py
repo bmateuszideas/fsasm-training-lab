@@ -460,7 +460,9 @@ class TestPlanWithStubActivity:
         assert output.plan.goal == direct_plan.goal
         assert len(output.plan.tasks) == len(direct_plan.tasks)
         # Check that task IDs match
-        for i, (out_task, direct_task) in enumerate(zip(output.plan.tasks, direct_plan.tasks)):
+        for i, (out_task, direct_task) in enumerate(
+            zip(output.plan.tasks, direct_plan.tasks)
+        ):
             assert out_task.task_id == direct_task.task_id
             assert out_task.sequence == direct_task.sequence
 

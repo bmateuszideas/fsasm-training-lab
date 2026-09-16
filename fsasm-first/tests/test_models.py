@@ -124,7 +124,9 @@ class TestChildTask:
             sequence=1,
             title="Test task",
             description="Test description",
-            verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+            verification=VerificationSpec(
+                type=VerificationType.SCHEMA, expected="test"
+            ),
         )
         assert task.task_id == "TASK-001"
         assert task.sequence == 1
@@ -141,7 +143,9 @@ class TestChildTask:
                 sequence=1,
                 title="Test",
                 description="Test",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             )
 
     def test_child_task_empty_title_rejected(self) -> None:
@@ -152,7 +156,9 @@ class TestChildTask:
                 sequence=1,
                 title="",
                 description="Test",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             )
 
     def test_child_task_empty_description_rejected(self) -> None:
@@ -163,7 +169,9 @@ class TestChildTask:
                 sequence=1,
                 title="Test",
                 description="",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             )
 
     def test_child_task_can_retry(self) -> None:
@@ -173,7 +181,9 @@ class TestChildTask:
             sequence=1,
             title="Test",
             description="Test",
-            verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+            verification=VerificationSpec(
+                type=VerificationType.SCHEMA, expected="test"
+            ),
             attempt=0,
             max_attempts=3,
         )
@@ -193,7 +203,9 @@ class TestChildTask:
             sequence=1,
             title="Test",
             description="Test",
-            verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+            verification=VerificationSpec(
+                type=VerificationType.SCHEMA, expected="test"
+            ),
             attempt=0,
             max_attempts=3,
         )
@@ -218,7 +230,9 @@ class TestPlan:
                 sequence=i,
                 title=f"Task {i}",
                 description=f"Description {i}",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             )
             for i in range(1, 4)
         ]
@@ -239,7 +253,9 @@ class TestPlan:
                 sequence=1,
                 title="Task 1",
                 description="Desc 1",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             )
         ]
         with pytest.raises(ValueError, match="exactly 3 ChildTasks"):
@@ -258,21 +274,27 @@ class TestPlan:
                 sequence=1,
                 title="Task 1",
                 description="Desc 1",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             ),
             ChildTask(
                 task_id="TASK-1",  # Duplicate!
                 sequence=2,
                 title="Task 2",
                 description="Desc 2",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             ),
             ChildTask(
                 task_id="TASK-3",
                 sequence=3,
                 title="Task 3",
                 description="Desc 3",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             ),
         ]
         with pytest.raises(ValueError, match="Task IDs must be unique"):
@@ -291,7 +313,9 @@ class TestPlan:
                 sequence=1,
                 title="Task 1",
                 description="Desc 1",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
                 dependencies=["NONEXISTENT"],
             ),
             ChildTask(
@@ -299,14 +323,18 @@ class TestPlan:
                 sequence=2,
                 title="Task 2",
                 description="Desc 2",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             ),
             ChildTask(
                 task_id="TASK-3",
                 sequence=3,
                 title="Task 3",
                 description="Desc 3",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             ),
         ]
         with pytest.raises(ValueError, match="depends on non-existent task"):
@@ -390,7 +418,9 @@ class TestRunState:
                 sequence=i,
                 title=f"Task {i}",
                 description=f"Desc {i}",
-                verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                verification=VerificationSpec(
+                    type=VerificationType.SCHEMA, expected="test"
+                ),
             )
             for i in range(1, 4)
         ]

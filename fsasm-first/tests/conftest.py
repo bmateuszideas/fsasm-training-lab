@@ -1,7 +1,5 @@
 """Pytest configuration and fixtures for FS-ASM workflow tests."""
 
-import pytest
-
 # Import Mistral Workflows testing fixtures
 from mistralai.workflows.testing.fixtures import (
     clear_dependency_cache,  # noqa: F401

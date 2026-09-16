@@ -1,24 +1,20 @@
 """Tests for FS-ASM Milestone Two Workflow."""
 
 import asyncio
-import json
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from fsasm.models import (
-    GoalInput,
     PlannerBackend,
     RunStatus,
 )
-from temporalio.testing import WorkflowEnvironment
 
 # Import for workflow module loading
 from src.workflows.fsasm_milestone_two import (
     FsasmMilestoneTwoWorkflow,
     WorkflowInput,
-    WorkflowOutput,
 )
 
 
@@ -47,11 +43,16 @@ class TestWorkflowInput:
         """Test that backend must be explicitly provided (no default)."""
         with pytest.raises(Exception) as exc_info:
             WorkflowInput(goal="Test goal")
-        assert "required" in str(exc_info.value).lower() or "planner_backend" in str(exc_info.value).lower()
+        assert (
+            "required" in str(exc_info.value).lower()
+            or "planner_backend" in str(exc_info.value).lower()
+        )
 
     def test_backend_can_be_stub(self):
         """Test that backend can be explicitly set to STUB."""
-        input_data = WorkflowInput(goal="Test goal", planner_backend=PlannerBackend.STUB)
+        input_data = WorkflowInput(
+            goal="Test goal", planner_backend=PlannerBackend.STUB
+        )
         assert input_data.planner_backend == PlannerBackend.STUB
 
     def test_custom_run_id(self):
@@ -199,7 +200,9 @@ class TestFsasmMilestoneTwoWorkflow:
         assert result["planner_invocation_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_workflow_returns_planner_metadata_with_custom_prompt_version(self, workflow_module):
+    async def test_workflow_returns_planner_metadata_with_custom_prompt_version(
+        self, workflow_module
+    ):
         """Test that workflow returns planner metadata with custom prompt version."""
         workflow_class = workflow_module.FsasmMilestoneTwoWorkflow
         workflow = workflow_class()
@@ -260,19 +263,42 @@ class TestFsasmMilestoneTwoWorkflow:
                     finish_reason="stop",
                     message=AssistantMessage(
                         role="assistant",
-                        content=json_module.dumps({
-                            "tasks": [
-                                {"title": "T1", "description": "D1", "dependencies": [],
-                                 "verification_type": "schema", "verification_expected": "E1",
-                                 "constraints": [], "allowed_files": [], "expected_evidence": []},
-                                {"title": "T2", "description": "D2", "dependencies": [1],
-                                 "verification_type": "exists", "verification_expected": "E2",
-                                 "constraints": [], "allowed_files": [], "expected_evidence": []},
-                                {"title": "T3", "description": "D3", "dependencies": [2],
-                                 "verification_type": "custom", "verification_expected": "E3",
-                                 "constraints": [], "allowed_files": [], "expected_evidence": []},
-                            ]
-                        }),
+                        content=json_module.dumps(
+                            {
+                                "tasks": [
+                                    {
+                                        "title": "T1",
+                                        "description": "D1",
+                                        "dependencies": [],
+                                        "verification_type": "schema",
+                                        "verification_expected": "E1",
+                                        "constraints": [],
+                                        "allowed_files": [],
+                                        "expected_evidence": [],
+                                    },
+                                    {
+                                        "title": "T2",
+                                        "description": "D2",
+                                        "dependencies": [1],
+                                        "verification_type": "exists",
+                                        "verification_expected": "E2",
+                                        "constraints": [],
+                                        "allowed_files": [],
+                                        "expected_evidence": [],
+                                    },
+                                    {
+                                        "title": "T3",
+                                        "description": "D3",
+                                        "dependencies": [2],
+                                        "verification_type": "custom",
+                                        "verification_expected": "E3",
+                                        "constraints": [],
+                                        "allowed_files": [],
+                                        "expected_evidence": [],
+                                    },
+                                ]
+                            }
+                        ),
                     ),
                 )
             ],
@@ -305,13 +331,12 @@ class TestFsasmMilestoneTwoWorkflow:
     ):
         """
         Real workflow-level test for M2 using Mistral Workflows testing utilities.
-        
+
         Uses create_test_worker to start a real worker and execute the workflow
         through the Mistral Workflows API with STUB backend (no API calls).
         Tests FsasmMilestoneTwoWorkflow specifically.
         """
         from src.workflows.fsasm_milestone_two import (
-            FsasmMilestoneTwoWorkflow,
             create_input_activity,
             validate_config_activity,
             plan_activity,
@@ -322,9 +347,9 @@ class TestFsasmMilestoneTwoWorkflow:
             persist_final_state_activity,
         )
         from mistralai.workflows.testing import create_test_worker
-        
+
         WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=10)
-        
+
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneTwoWorkflow],
@@ -350,13 +375,10 @@ class TestFsasmMilestoneTwoWorkflow:
                 task_queue="test-task-queue",
                 execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
             )
-            
+
             # Wait for result with client-side timeout as fallback
-            result = await asyncio.wait_for(
-                handle.result(),
-                timeout=15
-            )
-            
+            result = await asyncio.wait_for(handle.result(), timeout=15)
+
             # Verify structured result
             assert isinstance(result, dict)
             assert "run_id" in result
