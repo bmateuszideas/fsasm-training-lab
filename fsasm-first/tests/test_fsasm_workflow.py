@@ -20,6 +20,7 @@ class TestFsasmMilestoneOneWorkflow:
     def workflow_module(self):
         """Import the workflow module."""
         from src.workflows import fsasm_milestone_one
+
         return fsasm_milestone_one
 
     @pytest.fixture
@@ -155,9 +156,18 @@ class TestFsasmMilestoneOneWorkflow:
         input_data = workflow_module.WorkflowInput(goal="Integrate all components")
         result = await workflow.run(input_data)
         expected_fields = [
-            "run_id", "goal", "status", "plan_id", "task_count",
-            "task_ids", "verification_status", "verification_message",
-            "evidence_count", "created_at", "updated_at", "success",
+            "run_id",
+            "goal",
+            "status",
+            "plan_id",
+            "task_count",
+            "task_ids",
+            "verification_status",
+            "verification_message",
+            "evidence_count",
+            "created_at",
+            "updated_at",
+            "success",
         ]
         for field in expected_fields:
             assert field in result, f"Missing field: {field}"
@@ -187,7 +197,9 @@ class TestFsasmMilestoneOneWorkflow:
     @pytest.mark.asyncio
     async def test_create_input_activity(self, workflow_module):
         """Test the create_input_activity directly."""
-        input_data = workflow_module.WorkflowInput(goal="Test goal", run_id="test-run-123")
+        input_data = workflow_module.WorkflowInput(
+            goal="Test goal", run_id="test-run-123"
+        )
         result = await workflow_module.create_input_activity(input_data)
         assert isinstance(result, GoalInput)
         assert result.goal == "Test goal"
@@ -221,11 +233,11 @@ class TestFsasmMilestoneOneWorkflow:
     ):
         """
         Real workflow-level test using Mistral Workflows testing utilities.
-        
+
         This test uses create_test_worker to start a real worker and execute
         the workflow through the Mistral Workflows API, rather than calling
         workflow.run() directly.
-        
+
         This is the proper way to test workflows according to:
         .agents/skills/workflows/references/guides/testing.md
         """
@@ -239,9 +251,9 @@ class TestFsasmMilestoneOneWorkflow:
             persist_evidence_activity,
             persist_final_state_activity,
         )
-        
+
         WORKFLOW_EXECUTION_TIMEOUT = timedelta(seconds=10)
-        
+
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneOneWorkflow],
@@ -263,13 +275,10 @@ class TestFsasmMilestoneOneWorkflow:
                 task_queue="test-task-queue",
                 execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
             )
-            
+
             # Wait for result with client-side timeout as fallback
-            result = await asyncio.wait_for(
-                handle.result(),
-                timeout=15
-            )
-            
+            result = await asyncio.wait_for(handle.result(), timeout=15)
+
             # Verify structured result
             assert isinstance(result, dict)
             assert "run_id" in result
@@ -302,8 +311,14 @@ class TestFsasmMilestoneOneWorkflow:
         result = await workflow.run(input_data)
 
         # Check files in default runtime directory
-        from src.fsasm.persistence import DEFAULT_RUNTIME_DIR, DEFAULT_STATE_FILE, DEFAULT_PLAN_FILE, DEFAULT_EVIDENCE_DIR, DEFAULT_RUN_LOG_FILE
-        
+        from src.fsasm.persistence import (
+            DEFAULT_RUNTIME_DIR,
+            DEFAULT_STATE_FILE,
+            DEFAULT_PLAN_FILE,
+            DEFAULT_EVIDENCE_DIR,
+            DEFAULT_RUN_LOG_FILE,
+        )
+
         run_id = result["run_id"]
         run_dir = DEFAULT_RUNTIME_DIR / "runs" / run_id
 
@@ -329,8 +344,10 @@ class TestFsasmMilestoneOneWorkflow:
         evidence_dir = run_dir / DEFAULT_EVIDENCE_DIR
         assert evidence_dir.exists(), "evidence directory should exist"
         evidence_files = list(evidence_dir.glob("*.json"))
-        assert len(evidence_files) > 0, "evidence directory should have at least one file"
-        
+        assert len(evidence_files) > 0, (
+            "evidence directory should have at least one file"
+        )
+
         # Verify evidence file content
         for evidence_file in evidence_files:
             with open(evidence_file) as f:
@@ -350,11 +367,13 @@ class TestWorkflowRegistration:
     def test_workflow_is_registered(self):
         """Test that the workflow is properly registered."""
         from src.workflows import fsasm_milestone_one
+
         assert hasattr(fsasm_milestone_one, "FsasmMilestoneOneWorkflow")
 
     def test_workflow_has_entrypoint(self):
         """Test that the workflow has an entrypoint."""
         from src.workflows import fsasm_milestone_one
+
         workflow_class = fsasm_milestone_one.FsasmMilestoneOneWorkflow
         assert hasattr(workflow_class, "run")
 
@@ -365,6 +384,7 @@ class TestWorkflowDefinition:
     def test_workflow_name(self):
         """Test that workflow has correct name."""
         from src.workflows import fsasm_milestone_one
+
         temporal_def = getattr(
             fsasm_milestone_one.FsasmMilestoneOneWorkflow,
             "__temporal_workflow_definition",
@@ -384,6 +404,7 @@ class TestWorkflowDefinition:
     def test_workflow_description(self):
         """Test that workflow has description."""
         from src.workflows import fsasm_milestone_one
+
         workflow_class = fsasm_milestone_one.FsasmMilestoneOneWorkflow
         workflow_def = getattr(workflow_class, "__workflows_workflow_def", None)
         if workflow_def is not None:

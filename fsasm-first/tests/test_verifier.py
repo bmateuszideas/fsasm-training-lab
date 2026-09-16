@@ -470,13 +470,13 @@ class TestDeterministicVerifier:
         self, verifier: DeterministicVerifier, valid_state: RunState
     ) -> None:
         """Test that full run verification fails when evidence list is empty.
-        
+
         Verifier should FAIL when evidence_records is None or empty list.
         """
         result = verifier.verify_full_run(valid_state, valid_state.plan, None)
         # With our current implementation, None/empty evidence should FAIL
         assert result.status == VerificationResultStatus.FAIL
-        
+
         # Also test with empty list
         result2 = verifier.verify_full_run(valid_state, valid_state.plan, [])
         assert result2.status == VerificationResultStatus.FAIL
@@ -541,7 +541,7 @@ class TestDeterministicVerifier:
 
     def test_verifier_singleton(self) -> None:
         """Test that verifier module exports a singleton instance."""
-        from fsasm.verifier import verifier
+
         assert isinstance(verifier, DeterministicVerifier)
         # Should be able to use it directly
         valid_plan = Plan(
@@ -555,7 +555,9 @@ class TestDeterministicVerifier:
                     title=f"Task {i}",
                     description=f"Desc {i}",
                     status=TaskStatus.PENDING,
-                    verification=VerificationSpec(type=VerificationType.SCHEMA, expected="test"),
+                    verification=VerificationSpec(
+                        type=VerificationType.SCHEMA, expected="test"
+                    ),
                 )
                 for i in range(1, 4)
             ],
