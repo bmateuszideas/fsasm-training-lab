@@ -1,52 +1,67 @@
 # FS-ASM — CURRENT PROJECT STATUS
 
-**Snapshot date:** 2026-09-16. **Baseline verified:** `Fsasm-experimental` at `603fc607439b44e46b26d8c3a2114b34ba7c458c`. **This is a dated snapshot, not a promise that the branch HEAD never changes.** On entry, check the actual branch, HEAD, Git diff, PRs and CI before trusting any version-specific claim.
+**Snapshot date:** 2026-09-16. **Verified pre-update integration baseline:** `Fsasm-experimental` @ `6e43b852ab4de6eb8856e04fddda1fdd10c3f987`. This is a dated snapshot; a status-only PR and later work will move the branch. On every new session, check actual branch/HEAD, current refs, open PRs and CI before trusting version-specific claims.
 
-## Active decisions (as of this snapshot)
+## What is authoritative
 
-- Active integration branch: `Fsasm-experimental` (capital F). Implement changes on a short-lived task branch from its current HEAD; submit PR targeting `Fsasm-experimental`; do not push straight to `main` or merge branches automatically.
-- `main` is the default branch but an older, diverged integration containing the LLMC benchmark. Do not treat it as the latest runtime. A later explicit release/integration decision is needed to bring the stabilized runtime to `main`.
-- `Fsasm-llmc-testingbranch` is a frozen research baseline. LLMC is deferred, not a dependency, not adopted or rejected on the existing benchmark; no new LLMC work is authorized in this cycle.
-- M1 CLOSED; M2 CLOSED; M3 CLOSED; M4 IMPLEMENTED, STABILIZATION OPEN — **not CLOSED**. M5 NOT STARTED and must not start until M4 has explicit approval.
-- M4 normal test baseline: GitHub Actions for `603fc607` succeeded with **299 passed, 3 skipped, 0 failed**; Ruff, mypy and workflow lint jobs passed. This is evidence for tested scenarios, not proof of crash recovery or real coding.
-- Only one ChildTask is executed in M4; Executor is a deterministic STUB. Do not describe the project as an autonomous coding agent or call a synthetic stub claim an independent execution proof.
+This is the **single current project-status entry point**. Long-term intent: [`docs/CURRENT_FSASM_MODEL.md`](docs/CURRENT_FSASM_MODEL.md). Stable implementation constraints: [`AGENTS.md`](AGENTS.md). Document roles and precedence: [`docs/DOCUMENTATION_MAP.md`](docs/DOCUMENTATION_MAP.md). Branch rules: [`docs/BRANCH_POLICY.md`](docs/BRANCH_POLICY.md). Implementation and test claims require source, merged PRs and CI at an identified SHA. [`CURRENT_DEVELOPMENT_ANCHOR.md`](CURRENT_DEVELOPMENT_ANCHOR.md) preserves dated history with superseded instructions; do **not** execute its old LLMC-pause, old next-action or pending-S3 text as current direction.
 
-## Open engineering queue (one atomic task and one PR at a time)
+## Verified branch and documentation state (2026-09-16)
 
-| Item | Scope | State |
+| Branch | Observed SHA | Role |
 | --- | --- | --- |
-| S0 | Standard worker activity-name collision | DONE, merged PR #7 |
-| F2 | Retry `state.json` / `plan.json` normal-path consistency | DONE, merged PR #8; NOT multi-file transactionality |
-| S2 | Initial PLANNED persistence/log ordering | DONE, merged PR #9 |
-| S1 | Repeated RETRY_ONCE audit evidence ID uniqueness | DONE, merged PR #10 (narrow F6 subset) |
-| CI-01 | CI checkout actual SHA and Ruff tests | DONE, merged PR #12 |
-| S3 | Human Gate audit before/after payload | DONE, merged PR #13 at baseline SHA |
-| S4 | Stale M4 documentation/comments | OPEN |
-| F3 | Crash-consistent multi-file state snapshot/recovery | OPEN |
-| F4 | Reuse of run_id and explicit create vs resume | OPEN |
+| `Fsasm-experimental` | `6e43b852ab4de6eb8856e04fddda1fdd10c3f987` | Active integration and source for short-lived task branches. This was HEAD before the present status-only update. |
+| `main` | `a9f8ab6640acfda21c31675a03ba53d094f2909f` | GitHub default, older divergent runtime and LLMC benchmark; no implicit merge or reset. |
+| `__noop_check__` | `30a6e56935b7238b471f7f21365c21679693de20` | Legacy technical branch; removal requires a separate ancestry/reference check and explicit approval. |
+
+The three branches above were the persistent refs verified before creating this temporary documentation PR. A short-lived `docs/*` ref may additionally exist while its PR is open. Deleted branches: `Fsasm-llmc-testingbranch`, `vibe/f2-retry-state-consistency-b6d6c2`, `vibe/worker-activity-name-collision-b6d6c2`; do not describe them as present/frozen refs. Removing those branch names did **not** delete the LLMC benchmark on `main` or Git history. Check actual GitHub refs rather than treating this dated table as live inventory.
+
+**Documentation governance:** PR [#14](https://github.com/bmateuszideas/fsasm-training-lab/pull/14) was merged into `Fsasm-experimental` at `e6a3bd3e9cd6174246218dc92e6787f68e3fd12f`. It established root `AGENTS.md`, refreshed both READMEs, and added this status file, the documentation map and branch policy. The subsequent commit `6e43b852ab4de6eb8856e04fddda1fdd10c3f987` synchronized branch policy with the reduced branch list. **These actions are DONE; the PR #14 documentation task is no longer NEXT.**
+
+**Verification:** GitHub Actions [run 35122809983](https://github.com/bmateuszideas/fsasm-training-lab/actions/runs/35122809983) completed successfully for `6e43b852ab4de6eb8856e04fddda1fdd10c3f987`. The previously verified M4 baseline at `603fc607439b44e46b26d8c3a2114b34ba7c458c` reported **299 passed, 3 skipped, 0 failed** with Ruff, mypy and workflow lint passing. PR #14 and the branch-policy update changed documentation only; do not claim that the historical test count independently proves crash recovery or a real coding executor. Check the new PR's own CI before merging it.
+
+## Approved direction and actual capability
+
+- M1 **CLOSED**; M2 **CLOSED**; M3 **CLOSED**.
+- M4 **IMPLEMENTED; STABILIZATION OPEN — NOT CLOSED**. Its bounded retry and durable Human Gate scenarios have worker-level tests, but outstanding contracts are listed below.
+- M5 **NOT STARTED**. Do not start it without completion/review of M4 and explicit user authorization.
+- LLMC **DEFERRED**: research material persists on `main`, but no adoption, integration or new benchmark is authorized in this work cycle. Its recorded benchmark has methodological limitations; it is not proof of a runtime Context Builder.
+- Current M4 executes **one ChildTask** (possibly with retries); its Executor is a deterministic **STUB**. PASS here validates tested control-flow scenarios, not autonomous programming or independently verified code changes.
+- Runtime work uses a new short-lived task branch based on the **current** `Fsasm-experimental` HEAD, with a focused PR targeting `Fsasm-experimental`. Do not modify `main`, merge divergent branches, or delete history as part of M4 work.
+
+## M4 stabilization queue — one atomic issue per PR
+
+| Item | Meaning | Verified status |
+| --- | --- | --- |
+| S0 | Standard-worker activity-name collisions | DONE — merged PR #7 |
+| F2 | Normal-path retry consistency of `state.json` / `plan.json` | DONE — merged PR #8; **not** F3 transactionality |
+| S2 | Initial PLANNED persistence / log ordering | DONE — merged PR #9 |
+| S1 | Distinct audit IDs for repeated RETRY_ONCE | DONE — merged PR #10; only a narrow part of F6 |
+| CI-01 | Check correct PR SHA and lint test code | DONE — merged PR #12 |
+| S3 | Human Gate audit before/after values | DONE — merged PR #13 |
+| DOC-01 | Context-entry documents and branch cleanup inventory | DONE — merged PR #14 and follow-up branch-policy commit `6e43b85`; this status refresh is a separate documentation-only PR |
+| S4 | Stale M4 comments/docstrings | OPEN |
+| F3 | Crash-consistent multi-file state snapshot and recovery | OPEN |
+| F4 | Explicit run creation vs reuse/resumption of `run_id` | OPEN |
 | F5 | Safe identifiers in filesystem paths | OPEN |
-| F6/F7 | Complete evidence/gate identity and duplicate/stale human signal semantics | OPEN beyond S1 |
-| F8 | Finalizer validates matching run/task, internal verification checks and evidence before PASS | OPEN |
+| F6/F7 | Remaining evidence/gate identity, stale/duplicate/multiple human signal semantics | OPEN beyond S1 |
+| F8 | Finalizer checks authoritative run/task, verification checks and evidence before PASS | OPEN |
 
-These are known issues/risks from the 2026-09-16 audits, not proof that all reproducers have been run in the current session. Verify the current code and design a focused regression before marking any item DONE. Do not replace the backlog with newly invented milestone work.
+The open items are documented issues/risks from the 2026-09-16 reviews, **not** proof that each reproducer was rerun in the present session. Validate a selected issue against current source and tests before editing; do not silently close one from a model summary.
 
-## NEXT ACTION
+## NEXT ACTION — current work authorization
 
-**Documentation and branch governance only in PR `docs/context-source-of-truth-20260916`:** create clear entry points, hierarchy and branch policy; preserve history. This work is not an M4 stabilization fix and must not mark M4 closed. After review/merge, select exactly one outstanding M4 issue and implement with a focused regression. Do not begin M5, add LLMC, modify runtime behavior, or delete historical material as a side effect of documentation cleanup.
+1. **Finish this one-file status-only PR**: review its diff, confirm CI for its exact HEAD, then merge into `Fsasm-experimental`. No runtime/test modifications; do not treat it as an M4 fix.
+2. **After that merge**, select **one** outstanding M4 stabilization item with a bounded reproducer and acceptance criteria, then seek/record explicit authorization for that implementation. **F8 (finalizer contract)** is a proposed next candidate because an audit describes a false-PASS boundary, but selection and its fix are **not approved or implemented by this documentation update**. F3/F4/F5/F6/F7/S4 remain open regardless.
+3. Do not begin M5 or reactivate LLMC. Do not automatically merge `main` and `Fsasm-experimental`, or remove `__noop_check__`.
 
-## Read order for an agent with zero chat context
+## Fresh-agent entry and handoff
 
-1. Read repository `README.md` then this `PROJECT_STATUS.md` **first**; verify Git branch/HEAD and whether the snapshot is stale.
-2. Read `docs/CURRENT_FSASM_MODEL.md` for long-term architectural intent, and `AGENTS.md` for invariant engineering rules. Its M1 bootstrap and "begin with M1" instructions describe the original historical start and **do not override the completed milestone status in this file**.
-3. Read `docs/DOCUMENTATION_MAP.md` for the location, purpose and authority of every documentation category and `docs/BRANCH_POLICY.md` for branch rules.
-4. Inspect actual implementation and relevant tests only for the selected atomic task. If documents conflict with code, record the discrepancy; do not silently change project decisions.
-5. Consult `CURRENT_DEVELOPMENT_ANCHOR.md` as a **historical running record with mixed dated sections**, not an undated current command. Sections about a paused run at `c47f356`, pending S3 PR, or initiating LLMC are superseded by this dated snapshot and the actual merged history.
-6. Before stopping, update this file's snapshot baseline and queue in the same PR as an actual status-changing task, linking the PR and exact verification. Avoid repeatedly editing long historical narratives.
-
-## Facts, proposals, and verification
-
-Do not confuse a proposal in a review, a reported local test, and a confirmed merged commit. Use the actual code, merged PR and check run as evidence for DONE. Do not assert that a task is DONE on a draft/unmerged branch. If the branch has moved after this snapshot, refresh it before changing code.
+1. Read repository root `README.md` and this file; verify HEAD/branch/PRs/CI immediately. If this snapshot is stale, distinguish the documented historical baseline from current source.
+2. Read `docs/CURRENT_FSASM_MODEL.md` for goal, `AGENTS.md` for stable rules, `docs/DOCUMENTATION_MAP.md` for precedence, and `docs/BRANCH_POLICY.md` for branch procedure. Original M1 bootstrap wording in `AGENTS.md` is historical where superseded by verified milestones and approved current scope.
+3. Inspect **only** code and tests relevant to the selected atomic issue. Treat reviews and old chat summaries as leads, not executable instructions. Report rather than silently reconcile discrepancies.
+4. Record base SHA, precise change, targeted/full tests, CI link and outstanding problems in the task PR. Update this short status page on status-changing PRs; do not append another competing 'current stop point' to the old anchor.
 
 ## Preservation
 
-Historical materials in `stare dokumenty rozwojowe fsasm/` stay intact. LLMC benchmark artifacts remain research records on `main`; no automated merge or file removal. Previous anchor versions are preserved in Git history (baseline permalink: https://github.com/bmateuszideas/fsasm-training-lab/blob/603fc607439b44e46b26d8c3a2114b34ba7c458c/fsasm-first/CURRENT_DEVELOPMENT_ANCHOR.md). Never rely on chat history as the only source for an approved decision.
+Historical documents in `stare dokumenty rozwojowe fsasm/` remain intact. The LLMC benchmark is on `main`; the removed LLMC branch name is not an active ref. The original anchor remains in Git history (e.g. [baseline snapshot](https://github.com/bmateuszideas/fsasm-training-lab/blob/603fc607439b44e46b26d8c3a2114b34ba7c458c/fsasm-first/CURRENT_DEVELOPMENT_ANCHOR.md)). A model's previous conversation must never be the only record of project state or a decision.
