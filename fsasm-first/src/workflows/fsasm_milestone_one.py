@@ -61,7 +61,7 @@ class WorkflowOutput(BaseModel):
 
 
 @workflows.activity(
-    name="fsasm-create-input",
+    name="fsasm-m1-create-input",
     retry_policy_max_attempts=1,
 )
 async def create_input_activity(input_data: WorkflowInput) -> GoalInput:
@@ -75,7 +75,7 @@ async def create_input_activity(input_data: WorkflowInput) -> GoalInput:
 
 
 @workflows.activity(
-    name="fsasm-plan",
+    name="fsasm-m1-plan",
     retry_policy_max_attempts=1,
 )
 async def plan_activity(goal_input: GoalInput) -> Plan:
@@ -91,7 +91,7 @@ async def plan_activity(goal_input: GoalInput) -> Plan:
 
 
 @workflows.activity(
-    name="fsasm-validate-plan",
+    name="fsasm-m1-validate-plan",
     retry_policy_max_attempts=1,
 )
 async def validate_plan_activity(plan: Plan) -> Plan:
@@ -108,7 +108,7 @@ async def validate_plan_activity(plan: Plan) -> Plan:
 
 
 @workflows.activity(
-    name="fsasm-persist-plan-and-state",
+    name="fsasm-m1-persist-plan-and-state",
     retry_policy_max_attempts=3,
 )
 async def persist_plan_and_state_activity(
@@ -162,7 +162,7 @@ async def persist_plan_and_state_activity(
 
 
 @workflows.activity(
-    name="fsasm-verify-run",
+    name="fsasm-m1-verify-run",
     retry_policy_max_attempts=1,
 )
 async def verify_run_activity(
@@ -183,7 +183,7 @@ async def verify_run_activity(
 
 
 @workflows.activity(
-    name="fsasm-persist-evidence",
+    name="fsasm-m1-persist-evidence",
     retry_policy_max_attempts=3,
 )
 async def persist_evidence_activity(
@@ -237,7 +237,7 @@ async def persist_evidence_activity(
 
 
 @workflows.activity(
-    name="fsasm-persist-final-state",
+    name="fsasm-m1-persist-final-state",
     retry_policy_max_attempts=3,
 )
 async def persist_final_state_activity(

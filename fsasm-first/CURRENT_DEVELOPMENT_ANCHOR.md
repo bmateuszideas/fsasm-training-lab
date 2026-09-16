@@ -1,13 +1,35 @@
 # FS-ASM Development Anchor
 
-**Date:** 2026-09-09  
+**Date:** 2026-09-16  
 **Branch:** `Fsasm-experimental`  
-**Code baseline:** `c47f35602d812122fa40320a144880306cf7851d`  
-**Status:** PROGRAMMING PAUSED FOR CONTEXT-EFFICIENCY EXPERIMENTS
+**Code baseline:** `6cb17d62eb91813d147960533ea0ee1e9efc5d0d` (HEAD of `Fsasm-experimental`)  
+**Previous baseline:** `c47f35602d812122fa40320a144880306cf7851d` (M4 implementation pause, 2026-09-09)  
+**Status:** DEVELOPMENT RESUMED — M4 STABILIZATION
 
 This file is an explicit restart anchor for future humans and AI coding agents.
 
 Do not reconstruct the current project state from memory, chat history, or old summaries. Start from this file, the Git history, `AGENTS.md`, and the repository itself.
+
+---
+
+## 0. Approved decision (2026-09-16): resume FS-ASM, LLMC deferred
+
+On 2026-09-16 the user approved resuming FS-ASM implementation after the context-efficiency experiments.
+
+Approved decisions:
+
+- **LLMC is set aside.** It is NOT integrated with the FS-ASM runtime now. Do not treat LLMC as a runtime dependency or a current architectural component.
+- **No new context-efficiency benchmarks are launched.** The LLMC experiment (see section 6) is concluded as an experiment, not as an adoption.
+- **M4 is stabilized first.** Before any new milestone work, close the known M4 stabilization items.
+- **After M4 is closed, M5 starts as a minimal Context Builder** based initially on ordinary search and targeted reads. M5 is the next milestone after M4 stabilization.
+- **Do NOT start M5 in the current work cycle.** M5 begins only after M4 stabilization is complete and explicitly authorized.
+
+The distinction between "experiment concluded" and "M4 concluded" is explicit:
+
+- The **LLMC experiment** is concluded (research/evaluation phase ended). This does not imply M4 is concluded.
+- **M4** is implemented but not yet closed; it still has known stabilization items (see section 4 and the queue below).
+
+The historical context below (sections 1–11) is preserved unchanged as the prior baseline record. The new stabilization queue follows.
 
 ---
 
@@ -235,3 +257,48 @@ When programming work resumes, a fresh AI agent should begin in this order:
 ## 11. Current stop point in one sentence
 
 > **FS-ASM runtime development is paused at `c47f356`: M4 core behavior is implemented and heavily tested, a small set of review/audit cleanup remains, and the immediate next task is to benchmark a local repository-context/RAG mechanism (starting with LLMC) so future AI coding does not spend most of its budget repeatedly reconstructing the codebase.**
+
+---
+
+## 12. M4 stabilization queue (added 2026-09-16)
+
+This is the approved atomic queue for closing M4. Each item has a scope, a completion criterion, and a regression test. Do not start a broad architecture rebuild. Work on one item at a time, smallest correct change, preserving historical milestone semantics.
+
+These items are derived from the 2026-09-09 audit (section 4) plus the worker-collision finding. Re-verify each against current code before editing.
+
+### Task S0 — Standard worker activity-name collision (DONE 2026-09-16)
+
+- **Scope:** The standard worker's autodiscovery (`entrypoints.worker` -> `get_all_temporal_activities()`) collected two different activities that shared the same `name=` despite different contracts, so building a `temporalio.worker.Worker` raised `ValueError: More than one activity named fsasm-plan`. Seven M1 activity names collided with M2 / `planner_activities`. The smallest correct change was to prefix the seven M1 activity names with `m1-` (e.g. `fsasm-plan` -> `fsasm-m1-plan`), because the colliding pairs have different arguments/return types/behavior and must remain separate. No duplicates were removed merely by name.
+- **Completion criterion:** `get_all_temporal_activities()` collected via the standard autodiscovery path yields all-unique names, and a `temporalio.worker.Worker` can be built from that full list without `ValueError`.
+- **Regression test:** `tests/test_worker_activity_name_collision.py` reproduces the standard worker path (autodiscovery + `get_all_temporal_activities()`) and builds a `temporalio.worker.Worker` exactly like the production worker. Reverting any of the seven M1 names re-triggers `ValueError: More than one activity named ...` in this test.
+- **Status:** DONE on branch `vibe/worker-activity-name-collision-b6d6c2`. M1–M4 workflow scenarios and hello-world remain contract-conformant. The preexisting M4 `test_initial_persistence_ordering_worker_level` failure is unrelated to this change (see Task S2).
+
+### Task S1 — Human Gate audit EvidenceRecord ID uniqueness
+
+- **Scope:** Verify that Human Gate audit `EvidenceRecord` IDs are unique across repeated decisions on the same run/task. A repeated `RETRY_ONCE` must never overwrite an earlier audit record. Prefer deterministic uniqueness based on attempt or gate sequence.
+- **Completion criterion:** Every Human Gate decision produces a distinct, deterministic evidence ID even when `RETRY_ONCE` is applied more than once to the same task; no audit record is overwritten.
+- **Regression test:** A worker-level test that drives two consecutive `RETRY_ONCE` decisions on the same task and asserts two distinct evidence records with non-overlapping IDs and contents.
+
+### Task S2 — Initial M4 run log / persistence ordering consistency (preexisting failure)
+
+- **Scope:** Verify that the initial `m4_run_started` log reports `PLANNED`, matching the actually persisted initial `RunState`, and that the initial durable state observed by the worker-level test is `PLANNED` with `active_task_id=None`, all tasks `PENDING`, and authoritative `max_attempts=3`. As of `6cb17d6`, `tests/test_fsasm_milestone_four.py::TestInitialPersistenceOrdering::test_initial_persistence_ordering_worker_level` fails on the clean baseline (preexisting, unrelated to S0). This item closes that failure.
+- **Completion criterion:** `test_initial_persistence_ordering_worker_level` passes, and the implemented ordering (`set authoritative max_attempts -> persist PLANNED -> prepare execution -> RUNNING`) is consistent with logs and comments.
+- **Regression test:** The existing `test_initial_persistence_ordering_worker_level` plus a focused assertion that the initial `m4_run_started` log entry reports `PLANNED`.
+
+### Task S3 — Human Gate audit payload completeness
+
+- **Scope:** Preserve explicit `attempt` and `max_attempts` before and after a human-authorized decision where applicable, so the audit trail is reconstructable without chat history.
+- **Completion criterion:** Each Human Gate audit evidence payload contains the attempt counter and max_attempts at decision time; repeated decisions remain reconstructable from evidence alone.
+- **Regression test:** A test that performs a `RETRY_ONCE` decision and asserts the audit payload records `attempt` and `max_attempts` before and after the authorized retry.
+
+### Task S4 — Stale M4 comments/docstrings alignment
+
+- **Scope:** Align any remaining comments/docstrings that describe the older ordering (`persist -> set max_attempts` or initial `PLANNED -> RUNNING` inside initial persistence) with the implemented ordering: `set authoritative max_attempts -> persist PLANNED -> prepare execution -> RUNNING`.
+- **Completion criterion:** No comment/docstring contradicts the implemented ordering; `make check` and `lint-workflows` are clean.
+- **Regression test:** No behavioral test; verification is by grep/manual review that comments match code, plus `make check`.
+
+---
+
+## 13. Current stop point (updated 2026-09-16)
+
+> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; the next atomic task is S2 (initial M4 run log / persistence ordering consistency, which has a preexisting failing test). M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
