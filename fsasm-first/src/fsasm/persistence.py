@@ -599,12 +599,19 @@ class RuntimePersistence:
 
         records = []
         for path in evidence_dir.glob("*.json"):
+            # Validate each discovered path with the F5 containment/symlink
+            # mechanism BEFORE opening it. A symlinked evidence file could
+            # otherwise redirect reads into another run or outside the
+            # authorized evidence directory. This security check is kept
+            # OUTSIDE the broad exception handler below so a security
+            # rejection is never silently swallowed as a malformed file.
+            _ensure_contained(path, evidence_dir)
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 records.append(EvidenceRecord(**data))
             except Exception:
-                # Skip invalid files
+                # Skip invalid (non-symlink) JSON files only.
                 continue
         return records
 

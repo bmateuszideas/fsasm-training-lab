@@ -433,6 +433,41 @@ class TestEvidenceDirectorySymlinkIsolation:
         with pytest.raises(InvalidIdentifierError):
             persistence.save_evidence(_make_evidence(run_a, "evidence-a"))
 
+    def test_evidence_file_symlink_in_dir_redirects_load_all_evidence(
+        self, persistence: RuntimePersistence, tmp_path: Path
+    ) -> None:
+        """A symlinked evidence file inside an otherwise-valid evidence directory
+        cannot redirect ``load_all_evidence`` into another run's evidence.
+
+        Run A has a valid evidence directory containing a symlinked evidence
+        file that points at run B's evidence JSON. ``load_all_evidence(run_a)``
+        must raise ``InvalidIdentifierError`` and must not read or return the
+        foreign evidence.
+        """
+        run_a = "run-a-file-alias"
+        run_b = "run-b-file-target"
+        persistence.save_run_state(_make_state(run_a))
+        persistence.save_run_state(_make_state(run_b))
+        persistence.save_evidence(_make_evidence(run_b, "evidence-b"))
+
+        run_b_evidence_file = (
+            persistence.runs_dir / run_b / "evidence" / "evidence-b.json"
+        )
+        assert run_b_evidence_file.exists()
+
+        evidence_dir_a = persistence.runs_dir / run_a / "evidence"
+        evidence_dir_a.mkdir(parents=True, exist_ok=True)
+        os.symlink(run_b_evidence_file, evidence_dir_a / "evidence-b.json")
+
+        with pytest.raises(InvalidIdentifierError):
+            persistence.load_all_evidence(run_a)
+
+        # The foreign evidence was neither returned nor altered.
+        loaded_b = persistence.load_evidence(run_b, "evidence-b")
+        assert loaded_b is not None
+        assert loaded_b.run_id == run_b
+        assert loaded_b.evidence_id == "evidence-b"
+
 
 class TestDestinationFileSymlink:
     """An existing symlink at a destination file cannot cause an unsafe op."""
