@@ -427,6 +427,111 @@ class RuntimePersistence:
             )
 
     # =========================================================================
+    # F3 AUTHORITATIVE SNAPSHOT / RECOVERY
+    # =========================================================================
+    #
+    # Crash-consistency contract for this laboratory:
+    #
+    #   * ``state.json`` (with its embedded ``RunState.plan``) is the
+    #     authoritative run-state snapshot.
+    #   * ``plan.json`` is a derived/materialized view of that authoritative
+    #     snapshot. It exists for direct inspection and legacy readers, but it
+    #     is NEVER a second competing authority.
+    #   * A task transition is not considered durably committed until the
+    #     authoritative snapshot (``state.json``) has been atomically committed.
+    #   * Readers and recovery code must not treat a newer or partially written
+    #     ``plan.json`` as authoritative over ``state.json``.
+    #
+    # ``commit_run_state`` writes the authoritative snapshot first and the
+    # derived ``plan.json`` second (from the authoritative state's plan), so the
+    # derived view can never be newer than the authoritative snapshot. A crash
+    # between the two writes leaves a possibly-stale ``plan.json`` that recovery
+    # repairs from ``state.json``.
+    #
+    # This does NOT make evidence/log writes part of the same atomic
+    # transaction as state.json; those remain separate supplementary artifacts
+    # (see the F3 limitation note). Recovery guarantees logical plan/state
+    # consistency, not a fully transactional store.
+
+    def commit_run_state(self, state: RunState) -> None:
+        """Commit the authoritative run-state snapshot, then refresh the derived plan view.
+
+        F3 authoritative-snapshot boundary:
+        1. Write ``state.json`` (with the embedded plan) atomically first.
+        2. Write ``plan.json`` (derived from ``state.plan``) atomically second.
+
+        A crash between (1) and (2) leaves ``plan.json`` stale relative to
+        ``state.json``; ``recover_run`` / ``load_plan`` reconcile or repair it.
+        A crash before (1) leaves the previous authoritative snapshot intact.
+
+        Args:
+            state: The authoritative RunState (with ``state.plan`` embedded).
+
+        Raises:
+            PersistenceError: If either write fails. If the authoritative write
+                fails, the derived view is NOT written (no newer derived view
+                is ever left without a matching authoritative snapshot).
+        """
+        # Authoritative snapshot first. If this fails, do not write the derived
+        # view: a derived view newer than the authoritative snapshot is exactly
+        # the contradictory-state F3 forbids.
+        state_path = self._get_state_path(state.run_id)
+        self._atomic_write_json(state_path, state)
+
+        # Derived view second, from the authoritative state's plan. A crash
+        # here leaves a stale plan.json that recovery repairs from state.json.
+        if state.plan is not None:
+            plan_path = self._get_plan_path(state.run_id)
+            self._atomic_write_json(plan_path, state.plan)
+
+    def recover_run(self, run_id: str) -> RunState:
+        """Recover the authoritative run state, repairing the derived plan view.
+
+        F3 recovery contract:
+        - ``state.json`` is the single source of truth.
+        - If ``state.json`` is missing or corrupt, raise ``PersistenceError``
+          (do NOT silently substitute ``plan.json`` or fabricate state).
+        - If ``state.json`` is valid, repair ``plan.json`` from the embedded
+          ``state.plan`` so the derived view matches the authoritative snapshot.
+        - Recovery is idempotent: repeated recovery produces the same result.
+        - F4's duplicate-creation protection and F5's path validation remain
+          effective (recovery never creates a new run; it validates the
+          identifier and asserts the run was initialized).
+
+        Args:
+            run_id: The run to recover.
+
+        Returns:
+            The recovered authoritative RunState.
+
+        Raises:
+            PersistenceError: If the run was not created via ``create_run``,
+                if ``state.json`` is missing/corrupt, or if repair fails.
+        """
+        self._validate_run_id(run_id)
+        self.assert_run_initialized(run_id)
+
+        state = self.load_run_state(run_id)
+        if state is None:
+            raise PersistenceError(
+                message=(
+                    f"Cannot recover run '{run_id}': authoritative state.json is "
+                    f"missing; refusing to fabricate state from a derived view"
+                ),
+                path=str(self._get_state_path(run_id)),
+                operation="recover_run",
+            )
+        # load_run_state already raises PersistenceError on corrupt JSON; if we
+        # reach here state is a valid RunState.
+
+        # Repair the derived plan.json from the authoritative snapshot's plan.
+        if state.plan is not None:
+            plan_path = self._get_plan_path(run_id)
+            self._atomic_write_json(plan_path, state.plan)
+
+        return state
+
+    # =========================================================================
     # ATOMIC WRITE HELPERS
     # =========================================================================
 
@@ -624,17 +729,34 @@ class RuntimePersistence:
 
     def load_plan(self, run_id: str) -> Plan | None:
         """
-        Load a Plan from JSON file.
+        Load a Plan for a run.
+
+        F3 authoritative-snapshot contract: ``state.json`` (with its embedded
+        plan) is the single source of truth. When ``state.json`` exists and
+        contains an embedded plan, that authoritative plan is returned and the
+        derived ``plan.json`` is never treated as a competing authority (a
+        stale or partially written ``plan.json`` cannot contradict the
+        authoritative snapshot).
 
         Args:
             run_id: The run ID to load.
 
         Returns:
-            The loaded Plan, or None if not found.
+            The authoritative Plan (from ``state.json`` when present, else the
+            derived ``plan.json``), or None if neither exists.
 
         Raises:
-            PersistenceError: If load fails.
+            PersistenceError: If the authoritative ``state.json`` exists but is
+                corrupt, or if only a corrupt ``plan.json`` exists.
         """
+        # Authoritative snapshot first.
+        state = self.load_run_state(run_id)
+        if state is not None:
+            if state.plan is not None:
+                return state.plan
+            # state.json exists but has no embedded plan; fall through to the
+            # derived view (legacy/transition period) rather than returning None.
+
         path = self._get_plan_path(run_id)
         if not path.exists():
             return None

@@ -282,12 +282,10 @@ async def persist_initial_state_activity(
     # run_id is rejected here rather than silently overwriting existing state.
     persistence.create_run(run_id)
 
-    # Save plan - authoritative max_attempts was already set by
-    # set_task_max_attempts_activity before this activity ran.
-    persistence.save_plan(plan)
-
-    # Save state with PLANNED status
-    persistence.save_run_state(state)
+    # F3: commit the authoritative snapshot (state.json, with embedded plan)
+    # first, then the derived plan.json. A crash between the two leaves a stale
+    # plan.json that recovery repairs from state.json.
+    persistence.commit_run_state(state)
 
     # Save planner proposal as evidence artifact
     proposal_evidence = EvidenceRecord(
@@ -439,12 +437,10 @@ async def persist_failure_state_activity(
     # Persist verification result
     persistence.save_verification_result(verification_result)
 
-    # Persist state
-    persistence.save_run_state(state)
-
-    # Persist plan
-    if state.plan is not None:
-        persistence.save_plan(state.plan)
+    # F3: commit the authoritative snapshot (state.json first, then derived
+    # plan.json). A crash before this point leaves the prior authoritative
+    # snapshot intact; the FAILED transition is not committed until here.
+    persistence.commit_run_state(state)
 
     # Log failure
     persistence.save_run_log_entry(
@@ -516,10 +512,10 @@ async def transition_to_needs_human_activity(
                 plan_task.status = task.status
                 plan_task.attempt = task.attempt
 
-    # Persist state
-    persistence.save_run_state(state)
-    if state.plan is not None:
-        persistence.save_plan(state.plan)
+    # F3: commit the authoritative snapshot (state.json first, then derived
+    # plan.json). The NEEDS_HUMAN transition is not durably committed until the
+    # authoritative snapshot is written here.
+    persistence.commit_run_state(state)
 
     # Log human gate invocation
     persistence.save_run_log_entry(
@@ -586,10 +582,9 @@ async def persist_retry_state_activity(
     state.plan = authoritative_plan
     plan = authoritative_plan
 
-    # Persist state and plan from the single authoritative source.
-    persistence.save_run_state(state)
-    if authoritative_plan is not None:
-        persistence.save_plan(authoritative_plan)
+    # F3: commit the authoritative snapshot (state.json first, then derived
+    # plan.json) from the single authoritative source.
+    persistence.commit_run_state(state)
 
     # Log retry
     persistence.save_run_log_entry(
@@ -714,9 +709,11 @@ async def validate_and_apply_human_decision_activity(
 
         # Persist state
         state.touch()
-        persistence.save_run_state(state)
-        if state.plan is not None:
-            persistence.save_plan(state.plan)
+        # F3: commit the authoritative snapshot (state.json first, then derived
+        # plan.json). The human-authorized transition is not durably committed
+        # until the authoritative snapshot is written here, before the audit
+        # evidence and log.
+        persistence.commit_run_state(state)
 
         # Read the real post-transition values from the actual objects.
         attempt_after = task.attempt
@@ -801,9 +798,11 @@ async def validate_and_apply_human_decision_activity(
 
         # Persist state
         state.touch()
-        persistence.save_run_state(state)
-        if state.plan is not None:
-            persistence.save_plan(state.plan)
+        # F3: commit the authoritative snapshot (state.json first, then derived
+        # plan.json). The human-authorized transition is not durably committed
+        # until the authoritative snapshot is written here, before the audit
+        # evidence and log.
+        persistence.commit_run_state(state)
 
         # Read the real post-transition values from the actual objects.
         attempt_after = task.attempt
@@ -914,12 +913,11 @@ async def persist_final_m4_state_activity(
     )
     persistence.save_evidence(execution_evidence)
 
-    # Save final state
+    # F3: commit the authoritative snapshot (state.json first, then derived
+    # plan.json). Use the authoritative state's plan so the derived view cannot
+    # diverge from the authoritative snapshot.
     state.touch()
-    persistence.save_run_state(state)
-
-    # Save final plan
-    persistence.save_plan(plan)
+    persistence.commit_run_state(state)
 
     # Log final result
     persistence.save_run_log_entry(
