@@ -708,8 +708,15 @@ async def validate_and_apply_human_decision_activity(
             persistence.save_plan(state.plan)
 
         # Persist Human Gate audit evidence
+        # Include the attempt at decision time so consecutive RETRY_ONCE
+        # decisions on the same task produce distinct, deterministic audit ids
+        # and never overwrite each other (S1). task.attempt is the attempt that
+        # just failed and is stable for this gate event.
         audit_evidence = EvidenceRecord(
-            evidence_id=f"evidence-human-gate-retry-{state.run_id}-{task.task_id}",
+            evidence_id=(
+                f"evidence-human-gate-retry-{state.run_id}-{task.task_id}"
+                f"-{task.attempt}"
+            ),
             run_id=state.run_id,
             task_id=task.task_id,
             kind="human_gate_audit",
@@ -774,7 +781,10 @@ async def validate_and_apply_human_decision_activity(
 
         # Persist Human Gate audit evidence
         audit_evidence = EvidenceRecord(
-            evidence_id=f"evidence-human-gate-abort-{state.run_id}-{task.task_id}",
+            evidence_id=(
+                f"evidence-human-gate-abort-{state.run_id}-{task.task_id}"
+                f"-{task.attempt}"
+            ),
             run_id=state.run_id,
             task_id=task.task_id,
             kind="human_gate_audit",
