@@ -33,7 +33,7 @@ from datetime import timedelta
 import pytest
 
 from fsasm.persistence import RuntimePersistence
-from fsasm.models import RunStatus
+from fsasm.models import RunStatus, TaskStatus
 
 import workflows.fsasm_milestone_four as m4_module
 import fsasm.executor_activities as exec_module
@@ -90,18 +90,54 @@ def isolated_runtime(tmp_path, monkeypatch):
     The workflow activities instantiate `RuntimePersistence()` themselves, so
     the symbol is patched in every module that references it. The global
     `./runtime` is never touched or cleaned up.
+
+    Additionally, every persistence instance is wrapped in a capture proxy
+    that freezes an immutable copy of the FIRST `save_run_state` / `save_plan`
+    argument (via JSON round-trip) for the test's run_id. The first writes in a
+    worker run come from `persist_initial_state_activity` (PLANNED); later
+    writes (RUNNING) do not overwrite the frozen snapshot. This lets the test
+    prove the first durable snapshot of a real worker run is PLANNED without
+    any timing race or polling.
     """
     runtime_dir = tmp_path / "runtime"
     original = RuntimePersistence
+    captures = {
+        "first_state": None,
+        "first_plan": None,
+        "first_state_run_id": None,
+        "first_plan_run_id": None,
+    }
 
-    def _factory(*args, **kwargs):
-        kwargs.setdefault("runtime_dir", runtime_dir)
-        return original(*args, **kwargs)
+    class _CapturingPersistence:
+        """Delegating wrapper that freezes the first state/plan snapshot."""
 
-    monkeypatch.setattr(m4_module, "RuntimePersistence", _factory)
-    monkeypatch.setattr(exec_module, "RuntimePersistence", _factory, raising=False)
-    monkeypatch.setattr(plan_module, "RuntimePersistence", _factory, raising=False)
-    return runtime_dir
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("runtime_dir", runtime_dir)
+            self._inner = original(*args, **kwargs)
+
+        def save_run_state(self, state):
+            if captures["first_state"] is None:
+                captures["first_state"] = type(state).model_validate_json(
+                    state.model_dump_json()
+                )
+                captures["first_state_run_id"] = state.run_id
+            return self._inner.save_run_state(state)
+
+        def save_plan(self, plan):
+            if captures["first_plan"] is None:
+                captures["first_plan"] = type(plan).model_validate_json(
+                    plan.model_dump_json()
+                )
+                captures["first_plan_run_id"] = plan.run_id
+            return self._inner.save_plan(plan)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(m4_module, "RuntimePersistence", _CapturingPersistence)
+    monkeypatch.setattr(exec_module, "RuntimePersistence", _CapturingPersistence, raising=False)
+    monkeypatch.setattr(plan_module, "RuntimePersistence", _CapturingPersistence, raising=False)
+    return {"runtime_dir": runtime_dir, "captures": captures}
 
 
 def _read_log(runtime_dir, run_id):
@@ -158,8 +194,10 @@ async def test_initial_persistence_ordering_and_log_consistency(
         # Let the workflow complete; the init record is durable in the log.
         result = await asyncio.wait_for(handle.result(), timeout=20)
 
-    persistence = RuntimePersistence(runtime_dir=isolated_runtime)
-    log_entries = _read_log(isolated_runtime, test_run_id)
+    runtime_dir = isolated_runtime["runtime_dir"]
+    captures = isolated_runtime["captures"]
+    persistence = RuntimePersistence(runtime_dir=runtime_dir)
+    log_entries = _read_log(runtime_dir, test_run_id)
 
     # --- The m4_run_started entry is the durable witness of initial persistence.
     started = [e for e in log_entries if e.get("event") == "m4_run_started"]
@@ -199,11 +237,47 @@ async def test_initial_persistence_ordering_and_log_consistency(
     # PLANNED with all tasks PENDING. We verify the initial-state contract
     # directly via a focused domain check below.
 
+    # --- Worker-level capture of the FIRST durable snapshot (no polling).
+    # The capture proxy froze an immutable copy at the first save_run_state /
+    # save_plan call in the real worker run. Those first writes come from
+    # persist_initial_state_activity (PLANNED); later RUNNING writes do NOT
+    # overwrite the frozen snapshot. This is the worker-level proof that the
+    # correct first snapshot is created in the real workflow run, not only via
+    # a direct activity call.
+    assert captures["first_state"] is not None, (
+        "save_run_state was never called by the worker run"
+    )
+    assert captures["first_plan"] is not None, (
+        "save_plan was never called by the worker run"
+    )
+    # Both first writes belong to the same worker run.
+    assert captures["first_state_run_id"] == test_run_id
+    assert captures["first_plan_run_id"] == test_run_id
+    first_state = captures["first_state"]
+    first_plan = captures["first_plan"]
+    # Requirement 2: first persisted state in the real run is PLANNED.
+    assert first_state.status == RunStatus.PLANNED, (
+        f"first worker snapshot status must be PLANNED, got {first_state.status}"
+    )
+    # Requirement 3: active_task_id is None at initialization.
+    assert first_state.active_task_id is None
+    # Requirement 4: all three tasks PENDING at initialization.
+    for t in first_plan.tasks:
+        assert t.status == TaskStatus.PENDING, f"{t.task_id} must be PENDING in the first snapshot"
+    # Requirement 1: authoritative max_attempts established before the first save.
+    for t in first_plan.tasks:
+        assert t.max_attempts == 3, f"{t.task_id} max_attempts must be 3 in the first snapshot"
+    # Requirement 5: state.json.plan == plan.json at the first snapshot.
+    for s_t, p_t in zip(first_state.plan.tasks, first_plan.tasks):
+        assert s_t.status == p_t.status == TaskStatus.PENDING
+        assert s_t.max_attempts == p_t.max_attempts == 3
+        assert s_t.attempt == p_t.attempt == 0
+
     # --- Focused domain check of the initial persistence contract (no worker):
     # rebuild the exact initial state the activity produces and persist it
     # through the real activity in isolation, then read it back. This proves
     # requirements 2, 3, 4, 5 deterministically from durable files.
-    await _assert_initial_contract_deterministic(isolated_runtime)
+    await _assert_initial_contract_deterministic(runtime_dir)
 
     # Requirement 6: the run transitions to RUNNING later. The final state is
     # RUNNING (not PLANNED), proving PLANNED -> RUNNING happened after init.
@@ -232,7 +306,7 @@ async def _assert_initial_contract_deterministic(runtime_dir):
     """
     import pydantic
 
-    from fsasm.models import GoalInput, PlannerBackend, PlannerConfig, RunStatus, TaskStatus
+    from fsasm.models import GoalInput, PlannerBackend, PlannerConfig, RunStatus
     from fsasm.planner_activities import plan_activity
 
     run_id = "test-s2-domain-initial"
