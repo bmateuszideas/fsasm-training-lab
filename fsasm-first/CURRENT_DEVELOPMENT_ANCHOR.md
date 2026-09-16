@@ -301,7 +301,7 @@ These items are derived from the 2026-09-09 audit (section 4) plus the worker-co
 
 ## 13. Current stop point (updated 2026-09-16)
 
-> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; Task F2 (retry state.json/plan.json consistency) is done; the next atomic tasks are the remaining open items in the queue below. M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
+> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; Task F2 (retry state.json/plan.json consistency) is done; Task S2 (initial persistence ordering & run log consistency) is done; the next atomic tasks are the remaining open items in the queue below. M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
 
 ---
 
@@ -321,12 +321,21 @@ See section 12 for the full record. DONE on branch `vibe/worker-activity-name-co
 - **Regression test:** `tests/test_f2_retry_state_consistency.py` forces an independent JSON round-trip of activity arguments (as Temporal does), calls the real activity, and reads back the persisted `state.json` and `plan.json`. This test fails on the unpatched code (`FAILED == READY`) and passes after the fix.
 - **Status:** DONE on branch `vibe/f2-retry-state-consistency-b6d6c2`. Resolves ONLY F2; does not resolve F3 (multi-file snapshot transactionality).
 
+### Task S2-INIT-PERSISTENCE-ORDERING — Initial persistence ordering & run log consistency (DONE 2026-09-16)
+
+- **Scope:** Two confirmed problems. (A) `persist_initial_state_activity` persisted the initial `RunState` as `PLANNED` but wrote the `m4_run_started` log entry with `status=RunStatus.RUNNING.value`, contradicting the actually persisted initial state. (B) The preexisting `tests/test_fsasm_milestone_four.py::TestInitialPersistenceOrdering::test_initial_persistence_ordering_worker_level` tried to observe the transient `PLANNED` state by polling `state.json` every 100 ms; the workflow transitions `PLANNED -> RUNNING` very quickly during `prepare_task_activity`, so missing `PLANNED` in the poll is a race and does NOT prove it was never persisted. That test also called `RuntimePersistence().cleanup_all()` on the global `./runtime`, which is unsafe for test isolation.
+- **Minimal production fix:** `m4_run_started` now reports the actually persisted status (`state.status.value`, i.e. `PLANNED`) instead of a hard-coded `RUNNING`. The state machine is unchanged: the initial snapshot is still `PLANNED`, `active_task_id=None`, all tasks `PENDING`, and the `PLANNED -> RUNNING` transition still happens later in `prepare_task_activity`. Ordering `set authoritative max_attempts -> persist PLANNED -> prepare execution -> RUNNING` is unchanged; only the log value and the two directly related comments were corrected.
+- **Test method:** The old race-based, `cleanup_all()`-using worker-level test was removed. The deterministic replacement is `tests/test_s2_initial_persistence_ordering.py`. It does not poll the transient state. It (1) runs the real worker and reads the append-only `run.log.jsonl` after completion to prove the durable `m4_run_started` entry reports `PLANNED` and is the first event, (2) confirms the final run transitioned to `RUNNING` (so `PLANNED -> RUNNING` happened after init), and (3) drives `persist_initial_state_activity` directly with independently JSON-round-tripped arguments (mimicking the worker serialization boundary, not shared Python references) and reads back the durable `state.json` and `plan.json` to prove `PLANNED`, `active_task_id=None`, all tasks `PENDING`, `max_attempts=3`, and `state.json.plan == plan.json` at initialization. Persistence is isolated to `tmp_path` via monkeypatch of `RuntimePersistence` in every activity module; the global `./runtime` is never touched.
+- **Invariants preserved:** initial state `PLANNED`; `active_task_id=None`; all tasks `PENDING`; `max_attempts = max_retries_per_task + 1 = 3`; `PLANNED -> RUNNING` happens only during task preparation; retry/Human Gate/`RETRY_ONCE` semantics and counters unchanged.
+- **Completion criterion:** The deterministic S2 test passes; `m4_run_started` reports `PLANNED`; `state.json.plan == plan.json` at init; the workflow still completes the success scenario. The preexisting failing test no longer exists (replaced deterministically), and the full suite is green.
+- **Regression test:** `tests/test_s2_initial_persistence_ordering.py`. Fails on the unpatched code (`m4_run_started.status == RUNNING`) and passes after the fix.
+- **Status:** DONE on branch `vibe/s2-initial-persistence-ordering-b6d6c2`. Resolves ONLY S2; does NOT resolve F3 (proving correct init ordering is not a transactional multi-file write), and does not touch S1/S3/S4/F4/F5/F6/F7/F8.
+
 ### Open backlog (separate atomic tasks, not started)
 
 These items remain open and require their own atomic patches. They are NOT done.
 
 - **S1 — Human Gate audit EvidenceRecord ID uniqueness** (open). See section 12. Repeated `RETRY_ONCE` must never overwrite an earlier audit record.
-- **S2 — Initial M4 run log / persistence ordering consistency** (open, preexisting failing test). See section 12. `tests/test_fsasm_milestone_four.py::TestInitialPersistenceOrdering::test_initial_persistence_ordering_worker_level` still fails on the baseline and after F2; unrelated to F2.
 - **S3 — Human Gate audit payload completeness** (open). See section 12.
 - **S4 — Stale M4 comments/docstrings alignment** (open). See section 12.
 - **F3 — Multi-file snapshot transactionality** (open). `state.json` and `plan.json` consistency after an activity does NOT imply a transactional write of both files. A crash between the two writes can still leave them inconsistent. Separate atomic task; do not claim it is solved by F2.
