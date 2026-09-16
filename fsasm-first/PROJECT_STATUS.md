@@ -23,7 +23,7 @@ The three persistent refs above were confirmed after user cleanup and before thi
 ## Approved direction and actual capability
 
 - M1 **CLOSED**; M2 **CLOSED**; M3 **CLOSED**.
-- M4 **IMPLEMENTED; STABILIZATION OPEN — NOT CLOSED**. Bounded retries and durable Human Gate have worker-level tests. The remaining stabilization contracts are listed below.
+- M4 **IMPLEMENTED; STABILIZATION BATCH IMPLEMENTED — READY FOR EXTERNAL REVIEW, NOT CLOSED**. F4, F3, F6/F7 and S4 are implemented on the combined task branch `task/m4-stabilization-batch`; M4 closure is a separate acceptance decision after external review and merge.
 - M5 **NOT STARTED**. Do not start without the agreed M4 acceptance and explicit user authorization.
 - LLMC **DEFERRED**. Research material persists on `main`; no adoption, integration or new benchmark is authorized by this status.
 - M4 executes **one ChildTask**, possibly with retries, through a deterministic **STUB Executor**. A successful tested workflow path does not prove autonomous coding, independent artifact verification, complete plan execution or crash recovery.
@@ -41,11 +41,11 @@ The three persistent refs above were confirmed after user cleanup and before thi
 | S3 | Human Gate audit before/after values | DONE — merged PR #13 |
 | DOC-01 | Context-entry documents and branch inventory | DONE — merged PR #14, policy follow-up and status PRs #15/#16 |
 | F8 | Finalizer verifies authoritative run/task, checks and evidence before PASS | **DONE — independently reviewed and merged PR #17** |
-| S4 | Stale M4 comments/docstrings | OPEN |
-| F3 | Crash-consistent multi-file snapshot and recovery | OPEN |
-| F4 | Explicit new-run creation vs reuse/resumption of `run_id` | OPEN |
+| S4 | Stale M4 comments/docstrings | **IMPLEMENTED — READY FOR EXTERNAL REVIEW** (M4 stabilization batch) |
+| F3 | Crash-consistent multi-file snapshot and recovery | **IMPLEMENTED — READY FOR EXTERNAL REVIEW** (M4 stabilization batch) |
+| F4 | Explicit new-run creation vs reuse/resumption of `run_id` | **IMPLEMENTED — READY FOR EXTERNAL REVIEW** (M4 stabilization batch) |
 | F5 | Safe identifiers in filesystem paths | **DONE** ([PR #19](https://github.com/bmateuszideas/fsasm-training-lab/pull/19), task branch `task/f5-filesystem-path-safety`) \u2014 merged into `Fsasm-experimental` |
-| F6/F7 | Remaining evidence/gate identity and duplicate/stale/multiple signal handling | OPEN beyond S1 |
+| F6/F7 | Remaining evidence/gate identity and duplicate/stale/multiple signal handling | **IMPLEMENTED — READY FOR EXTERNAL REVIEW** (M4 stabilization batch) |
 
 The OPEN items are previously documented findings/risks, **not** proof that every reproducer was rerun in this session. Verify a selected issue against current source/tests before code edits; no single skill, review or model summary can silently authorize its implementation.
 
@@ -57,9 +57,20 @@ Tested security scenarios (new `tests/test_f5_filesystem_path_safety.py`, 225 te
 
 **F5 limitation:** the containment+symlink checks validate paths before each operation but are not a TOCTOU-hardened sandbox against arbitrary concurrent filesystem modification (e.g. an attacker replacing a directory or file with a symlink between the check and the write). The configured runtime root is assumed trusted (operator-selected); F5 addresses untrusted identifiers and unsafe identifier-derived paths, not run-ID reuse (F4), multi-file transactional writes (F3), or configuration permissions. F5 is **DONE** (merged PR #19).
 
+**M4 stabilization batch (F4, F3, F6/F7, S4) — IMPLEMENTED — READY FOR EXTERNAL REVIEW (2026-09-16):** Implemented on task branch `task/m4-stabilization-batch` from integration base `Fsasm-experimental` @ `267795eaffce209583a111ea59fdc5192521d432` (PR #19 merge). A single combined authorized PR delivers all four items (user-authorized exception to the one-atomic-PR-per-issue policy, scoped to this batch only).
+
+- **F4 (run identity):** added `RuntimePersistence.create_run` as the explicit new-run boundary — atomically reserves the run directory via `mkdir(exist_ok=False)` + a `.fsasm-run` reservation marker, so a duplicate `run_id` (regardless of goal) raises `RunAlreadyExistsError` before any write and existing state/plan/evidence/log are never silently overwritten. Wired into M1-M4 creation activities. `is_run_initialized` distinguishes a legitimately created run from a partially initialized/foreign directory. Normal subsequent internal writes remain unaffected. Reproduced: same `run_id` + different goal silently overwrote state/plan/evidence pre-fix.
+- **F3 (crash recovery):** `state.json` (with embedded plan) is the authoritative snapshot; `plan.json` is a derived view, NEVER a competing authority. `commit_run_state` writes state.json first then plan.json from the authoritative state's plan. `recover_run` has one source of truth: it rejects missing/corrupt authoritative state rather than fabricating from plan.json, repairs the derived view, and is idempotent. `load_plan` prefers the authoritative plan over a stale/contradictory plan.json. Wired all M4 authoritative writes to `commit_run_state`. F4/F5 remain effective during recovery; F8 rejects unsupported PASS from partial state. **Limitation:** atomically replacing state.json does NOT make evidence/log/plan writes one atomic transaction — they remain supplementary. Reproduced: state.json and plan.json could describe different task states after an exception between writes.
+- **F6/F7 (Human Gate integrity):** replaced the single overwritable `self.human_decision` slot with a bounded identity-aware mechanism (`accepted_decisions` keyed by deterministic `gate_id` = run_id/task_id/attempt; `applied_decision_ids` for idempotent application; `rejected_signals` audit). Added `gate_id` and `decision_id` to `HumanDecision`/`HumanDecisionSignal`. First accepted decision wins — a conflicting later signal cannot overwrite it; a duplicate delivery is a no-op (exactly-once application); a stale (wrong-gate) decision is rejected; a contradictory `decision_id` reuse is rejected; distinct valid decisions for distinct gates are accepted and remain separately auditable. A valid early signal after durable NEEDS_HUMAN but before `wait_condition` is preserved. Audit evidence reconstructs run/task/gate/decision/action/reason/attempt-before-after/task-status-before-after/run-status-before-after. No random/wall-clock identifiers in deterministic control flow. Reproduced: RETRY_ONCE overwrote ABORT in the slot; a gate-1 decision re-authorized gate 2.
+- **S4 (documentation):** corrected the M4 workflow class docstring to distinguish signal consumption from exactly-once application, atomic single-file writes from crash-consistent logical snapshots, task success from goal completion, and M4 STUB from a real Executor.
+
+Test evidence (all on the candidate task-branch HEAD): full suite **595 passed, 3 skipped, 0 failed**; `make check` (ruff lint + ruff format + mypy + semgrep) passes; `ruff check`/`ruff format --check` over `src/workflows/`, `src/fsasm/`, `tests/` pass; `git diff --check` clean. New tests: `test_f4_run_identity.py` (14), `test_f3_crash_recovery.py` (17), `test_f6f7_human_gate_reproduction.py` (5), `test_f6f7_human_gate_protocol.py` (9), `test_m4_integration_matrix.py` (11). S0/F2/S1/S2/S3/F5/F8 suites re-run green (249 passed). Worker-level tests verify persisted artifacts and M4-only-TASK-001 with TASK-002/003 PENDING.
+
+These items are **IMPLEMENTED — READY FOR EXTERNAL REVIEW** under the combined PR, NOT DONE before external review and merge. M4 remains OPEN pending external review and merge.
+
 ## NEXT ACTION — no new runtime task approved by this file
 
-**F8 has been merged and is DONE.** **F5 has been merged and is DONE ([PR #19](https://github.com/bmateuszideas/fsasm-training-lab/pull/19)); do not reimplement it.** M4 is still OPEN. The M4 stabilization batch (F4, F3, F6/F7, S4) is being implemented under a combined authorized PR on branch `task/m4-stabilization-batch`; see that PR for the task register and acceptance state. Do not begin M5, reactivate LLMC, synchronize `main` or remove `__noop_check__` as an automatic next step. Adding a Vibe process skill is a separate documentation/tooling change, not M4 completion.
+**F8 has been merged and is DONE.** **F5 has been merged and is DONE ([PR #19](https://github.com/bmateuszideas/fsasm-training-lab/pull/19)); do not reimplement it.** **The M4 stabilization batch (F4, F3, F6/F7, S4) is IMPLEMENTED — READY FOR EXTERNAL REVIEW under the combined PR on branch `task/m4-stabilization-batch`; do not reimplement these items.** M4 is still OPEN — closure is a separate acceptance decision after external review and merge of the batch PR. Do not begin M5, reactivate LLMC, synchronize `main` or remove `__noop_check__` as an automatic next step.
 
 ## Fresh-agent entry and handoff
 
