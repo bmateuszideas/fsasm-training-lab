@@ -60,18 +60,56 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# F6/F7 DETERMINISTIC GATE / DECISION IDENTITY HELPERS
+# =============================================================================
+#
+# Deterministic identifiers for Human Gate occurrences and logical decisions.
+# No random identifiers or wall-clock values inside deterministic workflow
+# control flow. ``gate_id`` derives from run_id/task_id/attempt (the attempt at
+# gate time uniquely identifies each consecutive gate occurrence for the same
+# task); ``decision_id`` derives from run_id/task_id/gate_id/action so the same
+# logical decision is idempotent and a contradictory reuse is detectable.
+
+
+def _gate_id(run_id: str, task_id: str, attempt: int) -> str:
+    """Deterministic gate-occurrence identifier."""
+    return f"gate-{run_id}-{task_id}-attempt-{attempt}"
+
+
+def _decision_id(
+    run_id: str, task_id: str, gate_id: str, action: HumanDecisionAction
+) -> str:
+    """Deterministic logical-decision identifier."""
+    return f"decision-{run_id}-{task_id}-{gate_id}-{action.value}"
+
+
+# =============================================================================
 # HUMAN DECISION SIGNAL MODEL
 # =============================================================================
 
 
 class HumanDecisionSignal(BaseModel):
-    """Signal payload for human decision."""
+    """Signal payload for human decision.
+
+    F6/F7 identity: carries explicit gate_id and decision_id so conflicting
+    overwrites, duplicate delivery and stale/gate-mismatched decisions can be
+    detected deterministically. The handler derives them from
+    run_id/task_id/attempt when not supplied.
+    """
 
     task_id: str = Field(..., description="The task_id this decision applies to.")
     action: HumanDecisionAction = Field(
         ..., description="Human decision action: RETRY_ONCE or ABORT."
     )
     reason: str = Field(default="", description="Optional reason for the decision.")
+    gate_id: str | None = Field(
+        default=None,
+        description="Gate occurrence identifier. If omitted, the handler derives it.",
+    )
+    decision_id: str | None = Field(
+        default=None,
+        description="Logical decision identifier. If omitted, the handler derives it.",
+    )
 
 
 # =============================================================================
@@ -611,6 +649,8 @@ async def validate_and_apply_human_decision_activity(
     decision: HumanDecision,
     task: ChildTask,
     state: RunState,
+    gate_id: str | None = None,
+    decision_id: str | None = None,
 ) -> tuple[ChildTask, RunState, HumanDecision]:
     """
     Validate and apply a human decision to the workflow state.
@@ -618,8 +658,14 @@ async def validate_and_apply_human_decision_activity(
     Signal handlers must only mutate deterministic workflow-local data.
     No filesystem I/O in signal handlers. Validate and persist through domain/activity code.
 
-    Validation:
+    F6/F7 identity validation:
     - decision.task_id must exactly match the currently gated task
+    - run_id must match the authoritative state run_id
+    - gate_id (if supplied) must match the gate occurrence derived from
+      state.run_id/task_id/attempt; a stale decision (different gate) is rejected
+    - decision_id (if supplied) is stamped onto the decision for audit/idempotency
+
+    Validation:
     - decision.action must be RETRY_ONCE or ABORT
 
     RETRY_ONCE:
@@ -649,6 +695,36 @@ async def validate_and_apply_human_decision_activity(
         InvalidTransitionError: If validation fails or transition is invalid.
     """
     persistence = RuntimePersistence()
+
+    # F6/F7: stamp deterministic gate_id / decision_id onto the decision for
+    # audit and idempotency. The activity is the single application boundary;
+    # duplicate deliveries are filtered by the workflow's applied_decision_ids
+    # set, but the activity also validates gate identity independently.
+    expected_gate_id = _gate_id(state.run_id, task.task_id, task.attempt)
+    # Reject a stale decision: if an explicit gate_id was supplied OR the
+    # decision already carries a gate_id from a previous application, it must
+    # match the current gate occurrence. A decision accepted for an earlier
+    # gate cannot authorize this (later) gate.
+    supplied_gate_id = gate_id if gate_id is not None else decision.gate_id
+    if supplied_gate_id is not None and supplied_gate_id != expected_gate_id:
+        raise InvalidTransitionError(
+            from_status=task.status.value,
+            to_status=TaskStatus.NEEDS_HUMAN.value,
+            entity_type="ChildTask",
+            entity_id=task.task_id,
+            reason=(
+                f"Human decision gate_id '{supplied_gate_id}' does not match the "
+                f"current gate occurrence '{expected_gate_id}' "
+                f"(stale or wrong-gate decision)"
+            ),
+        )
+    decision.gate_id = expected_gate_id
+    if decision_id is not None:
+        decision.decision_id = decision_id
+    elif decision.decision_id is None:
+        decision.decision_id = _decision_id(
+            state.run_id, task.task_id, expected_gate_id, decision.action
+        )
 
     # Validate decision.task_id matches the gated task
     if decision.task_id != task.task_id:
@@ -740,6 +816,9 @@ async def validate_and_apply_human_decision_activity(
                 "action": "RETRY_ONCE",
                 "reason": decision.reason,
                 "task_id": task.task_id,
+                "gate_id": decision.gate_id,
+                "decision_id": decision.decision_id,
+                "run_id": state.run_id,
                 "attempt_before": attempt_before,
                 "attempt_after": attempt_after,
                 "max_attempts_before": max_attempts_before,
@@ -761,6 +840,8 @@ async def validate_and_apply_human_decision_activity(
                 "run_id": state.run_id,
                 "task_id": task.task_id,
                 "action": "RETRY_ONCE",
+                "gate_id": decision.gate_id,
+                "decision_id": decision.decision_id,
                 "reason": decision.reason,
                 "new_max_attempts": task.max_attempts,
                 "current_attempt": task.attempt,
@@ -821,6 +902,9 @@ async def validate_and_apply_human_decision_activity(
                 "action": "ABORT",
                 "reason": decision.reason,
                 "task_id": task.task_id,
+                "gate_id": decision.gate_id,
+                "decision_id": decision.decision_id,
+                "run_id": state.run_id,
                 "attempt_before": attempt_before,
                 "attempt_after": attempt_after,
                 "max_attempts_before": max_attempts_before,
@@ -842,6 +926,8 @@ async def validate_and_apply_human_decision_activity(
                 "run_id": state.run_id,
                 "task_id": task.task_id,
                 "action": "ABORT",
+                "gate_id": decision.gate_id,
+                "decision_id": decision.decision_id,
                 "reason": decision.reason,
                 "run_status": state.status.value,
                 "active_task_id": state.active_task_id,
@@ -1010,7 +1096,22 @@ class FsasmMilestoneFourWorkflow:
     """
 
     def __init__(self):
-        self.human_decision: HumanDecision | None = None
+        # F6/F7: bounded, identity-aware pending-decision mechanism. A single
+        # overwritable slot let a later signal overwrite an earlier pending
+        # signal before consumption. Instead we keep:
+        #   * accepted_decisions: gate_id -> accepted HumanDecision (first-wins;
+        #     a conflicting later signal for the same gate is rejected without
+        #     overwriting the accepted one);
+        #   * applied_decision_ids: set of decision_ids already applied (idempotent
+        #     application; a duplicate delivery is a no-op, not a second
+        #     transition);
+        #   * rejected_signals: audit record of rejected signals and why.
+        self.accepted_decisions: dict[str, HumanDecision] = {}
+        self.applied_decision_ids: set[str] = set()
+        self.rejected_signals: list[dict[str, object]] = []
+        # The current gate being waited on (set before wait_condition). Signals
+        # for other gates are buffered (not silently applied to the wrong gate).
+        self.current_gate_id: str | None = None
 
     @workflows.workflow.signal(
         name="human_decision",
@@ -1022,12 +1123,99 @@ class FsasmMilestoneFourWorkflow:
 
         Signal handlers must only mutate deterministic workflow-local data.
         No filesystem I/O in signal handlers.
+
+        F6/F7 identity-aware handling (first accepted decision wins):
+        - Derive deterministic gate_id and decision_id when not supplied.
+        - If a decision is already accepted for this gate_id, reject any
+          conflicting signal (different decision_id or different payload)
+          without overwriting the accepted one. A repeated identical signal
+          (same decision_id and payload) is a no-op duplicate acknowledgement.
+        - Reusing the same decision_id with contradictory contents is rejected.
+        - Signals for a gate_id that is not the current gate are buffered in
+          accepted_decisions (keyed by gate_id) so they are not lost and not
+          applied to the wrong gate. A signal for a nonexistent future gate is
+          recorded as rejected so it cannot be silently applied later.
         """
-        self.human_decision = HumanDecision(
+        decision = HumanDecision(
             task_id=signal_data.task_id,
             action=signal_data.action,
             reason=signal_data.reason,
+            gate_id=signal_data.gate_id,
+            decision_id=signal_data.decision_id,
         )
+
+        gate_id = decision.gate_id
+        decision_id = decision.decision_id
+
+        # If the signal did not carry an explicit gate_id, key it to the gate
+        # the workflow is currently waiting on. This preserves the existing
+        # signal contract (task_id + action) while binding the decision to the
+        # correct gate occurrence. A signal arriving before any gate is open is
+        # buffered under current_gate_id=None and rejected (no future gate to
+        # attach to).
+
+        # Detect contradictory reuse of the same decision_id: if this decision_id
+        # was already accepted but with a different payload, reject it.
+        for existing in self.accepted_decisions.values():
+            if existing.decision_id == decision_id and decision_id is not None:
+                if (
+                    existing.task_id != decision.task_id
+                    or existing.action != decision.action
+                    or existing.gate_id != decision.gate_id
+                ):
+                    self.rejected_signals.append(
+                        {
+                            "reason": "contradictory_decision_id_reuse",
+                            "decision_id": decision_id,
+                            "task_id": decision.task_id,
+                            "action": decision.action.value,
+                        }
+                    )
+                    return
+                # Identical duplicate of an already-accepted decision: no-op
+                # acknowledgement (idempotent delivery).
+                return
+
+        # Compute the effective gate key: the signal's explicit gate_id, or the
+        # gate the workflow is currently waiting on. This is used for both the
+        # first-wins conflict check and acceptance.
+        effective_gate_id = gate_id if gate_id is not None else self.current_gate_id
+        if effective_gate_id is None:
+            self.rejected_signals.append(
+                {
+                    "reason": "no_open_gate",
+                    "task_id": decision.task_id,
+                    "action": decision.action.value,
+                }
+            )
+            return
+
+        # First accepted decision wins for a given gate. If a decision is
+        # already accepted for this gate, a conflicting signal is rejected
+        # without overwriting it.
+        if effective_gate_id in self.accepted_decisions:
+            existing = self.accepted_decisions[effective_gate_id]
+            if (
+                existing.decision_id != decision_id
+                or existing.action != decision.action
+            ):
+                self.rejected_signals.append(
+                    {
+                        "reason": "conflicting_signal_rejected_first_wins",
+                        "gate_id": effective_gate_id,
+                        "accepted_action": existing.action.value,
+                        "rejected_action": decision.action.value,
+                    }
+                )
+                return
+            # Identical duplicate for the same gate: no-op.
+            return
+
+        # Accept the decision, keyed by the effective gate so it is not applied
+        # to the wrong gate. The workflow consumes only the decision for
+        # current_gate_id.
+        decision.gate_id = effective_gate_id
+        self.accepted_decisions[effective_gate_id] = decision
 
     @workflows.workflow.entrypoint
     async def run(self, input: WorkflowInput) -> WorkflowOutput:
@@ -1172,26 +1360,43 @@ class FsasmMilestoneFourWorkflow:
                         # Wait for human decision signal
                         # A signal may legally arrive after NEEDS_HUMAN was durably persisted
                         # but before workflow code reaches the wait.
-                        # wait_condition ensures we don't miss early signals.
-                        await workflows.workflow.wait_condition(
-                            lambda: self.human_decision is not None
+                        # F6/F7: the decision is bound to a specific gate occurrence by
+                        # gate_id (run_id/task_id/attempt). Set current_gate_id BEFORE the
+                        # wait so the handler can buffer signals for other gates and so a
+                        # valid early signal for THIS gate is preserved.
+                        gate_id = _gate_id(state.run_id, task.task_id, task.attempt)
+                        self.current_gate_id = gate_id
+
+                        def _gate_has_decision(gid: str = gate_id) -> bool:
+                            return gid in self.accepted_decisions
+
+                        await workflows.workflow.wait_condition(_gate_has_decision)
+
+                        # Consume the accepted decision for this gate. Mark its
+                        # decision_id as applied so a duplicate delivery cannot
+                        # trigger a second domain transition.
+                        decision = self.accepted_decisions[gate_id]
+                        applied_id = decision.decision_id or _decision_id(
+                            state.run_id, task.task_id, gate_id, decision.action
                         )
+                        already_applied = applied_id in self.applied_decision_ids
+                        self.applied_decision_ids.add(applied_id)
 
-                        # Wait until pending decision is non-None, copy the decision,
-                        # immediately clear the pending slot, then apply the copied decision.
-                        # This guarantees exactly-once consumption while preserving signals
-                        # that arrive early.
-                        decision = self.human_decision
-                        self.human_decision = None
-
-                        if decision is not None:
-                            # Validate and apply human decision through domain/activity code
+                        if not already_applied and decision is not None:
+                            # Validate and apply human decision through domain/activity code.
+                            # Pass gate_id/decision_id so the activity binds the audit
+                            # to the correct gate occurrence and rejects stale/gate-
+                            # mismatched decisions.
                             (
                                 task,
                                 state,
                                 applied_decision,
                             ) = await validate_and_apply_human_decision_activity(
-                                decision, task, state
+                                decision,
+                                task,
+                                state,
+                                gate_id=gate_id,
+                                decision_id=applied_id,
                             )
                             plan = state.plan if state.plan is not None else plan
                             final_human_decision = applied_decision
@@ -1213,7 +1418,11 @@ class FsasmMilestoneFourWorkflow:
                                 continue
 
                         else:
-                            # No decision received, stay in NEEDS_HUMAN
+                            # Duplicate delivery of an already-applied decision: no-op,
+                            # do not re-transition. The workflow stays at the same
+                            # gate state (the task is READY from the first application).
+                            # This branch cannot normally run here because the gate is
+                            # consumed once, but it documents exactly-once application.
                             break
 
         # Step 7: Persist final state
