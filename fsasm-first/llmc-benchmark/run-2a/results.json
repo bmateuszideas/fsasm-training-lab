@@ -1,0 +1,245 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "n_llmc_ops": 2,
+      "n_reads": 1,
+      "ops": [
+        "search",
+        "list_symbols",
+        "read",
+        "read",
+        "read"
+      ],
+      "retrieval_sec": 0.7,
+      "files_opened": [
+        "src/workflows/fsasm_milestone_four.py"
+      ],
+      "lines_read": 285,
+      "chars_read": 10371,
+      "llmc_est_span_payload_tokens": 8050,
+      "answer_verdict": "PASS",
+      "retrieval_verdict": "PASS",
+      "gold": [
+        "transition_to_needs_human",
+        "receive_human_decision",
+        "validate_and_apply_human_decision"
+      ],
+      "found": [
+        "transition_to_needs_human_activity",
+        "validate_and_apply_human_decision_activity",
+        "receive_human_decision"
+      ],
+      "missed_gold": [],
+      "extra_found": [],
+      "final_answer": "Human Gate is implemented in src/workflows/fsasm_milestone_four.py across three activities: transition_to_needs_human_activity (465-535) durably sets run+task to NEEDS_HUMAN and logs human_gate_invoked BEFORE waiting; validate_and_apply_human_decision_activity (595-796) validates task_id match, status gates, applies RETRY_ONCE (NEEDS_HUMAN->READY+RUNNING, max_attempts=attempt+1) or ABORT (->FAILED), persists state+plan and audit evidence; receive_human_decision (964-975) is the signal handler that stores the decision for later application. Durability comes from save_run_state/save_plan/save_run_log_entry before wait_condition."
+    },
+    {
+      "id": "q2",
+      "n_llmc_ops": 2,
+      "n_reads": 2,
+      "ops": [
+        "search",
+        "span",
+        "read",
+        "read",
+        "read"
+      ],
+      "retrieval_sec": 0.712,
+      "files_opened": [
+        "src/fsasm/models.py",
+        "src/fsasm/transitions.py"
+      ],
+      "lines_read": 96,
+      "chars_read": 3915,
+      "llmc_est_span_payload_tokens": 11550,
+      "answer_verdict": "PASS",
+      "retrieval_verdict": "PASS",
+      "gold": [
+        "can_retry",
+        "retry_count_remaining",
+        "check_retry_budget"
+      ],
+      "found": [
+        "ChildTask.can_retry",
+        "ChildTask.retry_count_remaining",
+        "check_retry_budget_activity",
+        "transition_task budget check",
+        "_TASK_REQUIRES_RETRY_CHECK"
+      ],
+      "missed_gold": [],
+      "extra_found": [
+        "_TASK_REQUIRES_RETRY_CHECK enforcement in transition_task (transitions.py:132-160)"
+      ],
+      "final_answer": "Budget is controlled by ChildTask.can_retry() in src/fsasm/models.py:428-435 (attempt < max_attempts). retry_count_remaining (437-439) reports the remainder. Enforcement lives in transition_task (src/fsasm/transitions.py:132-160): for FAILED->READY it raises RetryExhaustedError if !can_retry; for FAILED->NEEDS_HUMAN it requires can_retry() to be False. Workflow surface: check_retry_budget_activity (fsasm_milestone_four.py:348-377)."
+    },
+    {
+      "id": "q3",
+      "n_llmc_ops": 4,
+      "n_reads": 2,
+      "ops": [
+        "search",
+        "span",
+        "where-used",
+        "read",
+        "span",
+        "read"
+      ],
+      "retrieval_sec": 1.368,
+      "files_opened": [
+        "src/fsasm/transitions.py",
+        "src/workflows/fsasm_milestone_four.py"
+      ],
+      "lines_read": 81,
+      "chars_read": 2737,
+      "llmc_est_span_payload_tokens": 12250,
+      "answer_verdict": "PASS",
+      "retrieval_verdict": "PASS",
+      "gold": [
+        "models.py max_attempts",
+        "transitions.py max_attempts"
+      ],
+      "found": [
+        "set_task_max_attempts_activity (initial authoritative set)",
+        "apply_human_authorized_task_transition (new_max_attempts on RETRY_ONCE)",
+        "ChildTask.max_attempts field (models.py)"
+      ],
+      "missed_gold": [],
+      "extra_found": [
+        "validate_and_apply_human_decision_activity calls apply_human_authorized_task_transition with new_max_attempts=attempt+1"
+      ],
+      "final_answer": "Three mutation paths: (1) set_task_max_attempts_activity (fsasm_milestone_four.py:321-341) sets max_attempts = max_retries_per_task+1 authoritatively at start. (2) apply_human_authorized_task_transition (transitions.py:218-277) writes task.max_attempts = new_max_attempts on RETRY_ONCE. (3) invoked from validate_and_apply_human_decision_activity (fsasm_milestone_four.py:595-796) with new_max_attempts=task.attempt+1. Field defined in ChildTask (models.py)."
+    },
+    {
+      "id": "q4",
+      "n_llmc_ops": 2,
+      "n_reads": 1,
+      "ops": [
+        "search",
+        "span",
+        "read",
+        "read"
+      ],
+      "retrieval_sec": 0.694,
+      "files_opened": [
+        "tests/test_fsasm_milestone_four.py"
+      ],
+      "lines_read": 34,
+      "chars_read": 1223,
+      "llmc_est_span_payload_tokens": 7700,
+      "answer_verdict": "PASS",
+      "retrieval_verdict": "PASS",
+      "gold": [
+        "test_fsasm_milestone_four.py retry_once"
+      ],
+      "found": [
+        "TestStatePersistence.test_validate_and_apply_human_decision_retry_once (unit)",
+        "TestRetryOnceRegressionWorker.test_retry_once_authorizes_exactly_one_additional_execution (worker regression)"
+      ],
+      "missed_gold": [],
+      "extra_found": [
+        "TestRetryOnceRegressionWorker worker-level test (gold only listed one)"
+      ],
+      "final_answer": "Two tests in tests/test_fsasm_milestone_four.py: TestStatePersistence.test_validate_and_apply_human_decision_retry_once (559-630) unit-tests the activity for RETRY_ONCE; TestRetryOnceRegressionWorker.test_retry_once_authorizes_exactly_one_additional_execution (1704-1909) is the worker regression proving max_attempts=1 -> gate#1 -> RETRY_ONCE -> attempt 2 fails -> gate#2 (no third attempt without another signal)."
+    },
+    {
+      "id": "q5",
+      "n_llmc_ops": 7,
+      "n_reads": 3,
+      "ops": [
+        "search",
+        "span",
+        "span",
+        "read",
+        "read",
+        "search",
+        "search",
+        "read",
+        "read",
+        "span",
+        "search",
+        "read"
+      ],
+      "retrieval_sec": 2.8,
+      "files_opened": [
+        "src/fsasm/executor_activities.py",
+        "src/fsasm/transitions.py",
+        "src/workflows/fsasm_milestone_four.py"
+      ],
+      "lines_read": 230,
+      "chars_read": 7976,
+      "llmc_est_span_payload_tokens": 23450,
+      "answer_verdict": "PASS",
+      "retrieval_verdict": "PASS",
+      "gold": [
+        "transitions.py PLANNED",
+        "fsasm_milestone_four.py persist_initial_state"
+      ],
+      "found": [
+        "persist_initial_state_activity (creates PLANNED)",
+        "prepare_task_activity in executor_activities.py (performs PLANNED->RUNNING via transition_run)",
+        "transition_run + _RUN_ALLOWED_TRANSITIONS in transitions.py"
+      ],
+      "missed_gold": [],
+      "extra_found": [
+        "prepare_task_activity in src/fsasm/executor_activities.py:272-334 (the actual call site of transition_run(state, RUNNING) - a location the gold set did not enumerate)"
+      ],
+      "final_answer": "persist_initial_state_activity (fsasm_milestone_four.py:252-314) creates RunState with PLANNED. The actual PLANNED->RUNNING transition happens in prepare_task_activity (src/fsasm/executor_activities.py:272-334): if state.status==PLANNED it calls transition_run(state, RunStatus.RUNNING), then transitions the task to RUNNING and persists. transition_run (transitions.py:164-210) enforces _RUN_ALLOWED_TRANSITIONS which allows PLANNED->{RUNNING}."
+    },
+    {
+      "id": "q6",
+      "n_llmc_ops": 3,
+      "n_reads": 2,
+      "ops": [
+        "search",
+        "span",
+        "read",
+        "search",
+        "read"
+      ],
+      "retrieval_sec": 1.404,
+      "files_opened": [
+        "src/fsasm/persistence.py",
+        "tests/test_fsasm_milestone_four.py"
+      ],
+      "lines_read": 40,
+      "chars_read": 1855,
+      "llmc_est_span_payload_tokens": 8050,
+      "answer_verdict": "PASS",
+      "retrieval_verdict": "PASS",
+      "gold": [
+        "fsasm_milestone_four.py evidence_id",
+        "persistence.py save_evidence"
+      ],
+      "found": [
+        "evidence creation sites fsasm_milestone_four.py:694 (RETRY_ONCE) and 759 (ABORT)",
+        "RuntimePersistence.save_evidence (persistence.py:252-265)",
+        "evidence_id format evidence-human-gate-{action}-{run_id}-{task_id} (no gate/attempt sequence -> collision risk on repeated same-action)",
+        "regression test asserting 2 human_gate_audit entries"
+      ],
+      "missed_gold": [],
+      "extra_found": [
+        "collision-prone evidence_id format discovered; regression test at test_fsasm_milestone_four.py:1884-1909 asserting len(human_gate_audit)==2 (RETRY_ONCE+ABORT)"
+      ],
+      "final_answer": "Code: validate_and_apply_human_decision_activity persists EvidenceRecord(kind=human_gate_audit) at two sites in fsasm_milestone_four.py (694 RETRY_ONCE, 759 ABORT) with evidence_id=f\"evidence-human-gate-{retry|abort}-{run_id}-{task_id}\". save_evidence (persistence.py:252-265) atomically writes {evidence_id}.json. The id lacks a gate/attempt sequence so repeated RETRY_ONCE on the same run/task would overwrite. Tests: the worker regression (test_fsasm_milestone_four.py:1884-1909) asserts 2 human_gate_audit entries (1 RETRY_ONCE + 1 ABORT)."
+    }
+  ],
+  "aggregate": {
+    "total_llmc_ops": 20,
+    "total_reads_files": 6,
+    "files_opened": [
+      "src/fsasm/executor_activities.py",
+      "src/fsasm/models.py",
+      "src/fsasm/persistence.py",
+      "src/fsasm/transitions.py",
+      "src/workflows/fsasm_milestone_four.py",
+      "tests/test_fsasm_milestone_four.py"
+    ],
+    "total_lines_read": 766,
+    "total_chars_read": 28077,
+    "total_retrieval_sec": 7.678,
+    "total_est_span_payload_tokens": 71050,
+    "answers_pass": 6,
+    "answers_total": 6
+  }
+}

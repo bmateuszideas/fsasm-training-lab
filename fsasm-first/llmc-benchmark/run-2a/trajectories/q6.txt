@@ -1,0 +1,6 @@
+LLMC search 'human_gate_audit' -> 20 hits (0.694s)
+LLMC span 'save_evidence' -> 1 hits (0.001s)
+  src/fsasm/persistence.py:252-265 RuntimePersistence.save_evidence (function)
+READ src/fsasm/persistence.py:252-265 (14 lines, 497 chars)
+LLMC search 'evidence-human-gate' -> 2 hits (0.709s)
+READ tests/test_fsasm_milestone_four.py:1884-1909 (26 lines, 1358 chars)
