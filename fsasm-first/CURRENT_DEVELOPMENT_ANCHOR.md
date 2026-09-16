@@ -301,4 +301,38 @@ These items are derived from the 2026-09-09 audit (section 4) plus the worker-co
 
 ## 13. Current stop point (updated 2026-09-16)
 
-> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; the next atomic task is S2 (initial M4 run log / persistence ordering consistency, which has a preexisting failing test). M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
+> **FS-ASM runtime development has resumed at `6cb17d6`. LLMC is deferred and not integrated. M4 stabilization is in progress: Task S0 (worker activity-name collision) is done; Task F2 (retry state.json/plan.json consistency) is done; the next atomic tasks are the remaining open items in the queue below. M5 has NOT been started and is not to be started until M4 stabilization is complete and explicitly authorized.**
+
+---
+
+## 14. M4 stabilization queue — extended with F-audit findings (added 2026-09-16)
+
+The original S0–S4 queue (section 12) is preserved unchanged. This section extends it with the confirmed F-audit findings and marks completed work. Identification is more important than renumbering, so the original S1–S4 numbers are kept and the new items get explicit identifiers.
+
+### Task S0 — Standard worker activity-name collision (DONE 2026-09-16)
+
+See section 12 for the full record. DONE on branch `vibe/worker-activity-name-collision-b6d6c2`, merged into `Fsasm-experimental` at `0414d69`.
+
+### Task F2-STATE-CONSISTENCY — Retry state.json / plan.json consistency (DONE 2026-09-16)
+
+- **Scope:** `persist_retry_state_activity` in `src/workflows/fsasm_milestone_four.py` updated the separate `plan` argument but wrote `state` (embedding `state.plan`) and `plan` independently. In the real worker, activity arguments cross the serialization boundary, so `state.plan` and the `plan` arg are independent objects; updating only `plan` left `state.json` (`state.plan.tasks[*].status = FAILED`) stale relative to `plan.json` (`tasks[*].status = READY`) after a `FAILED -> READY` retry transition. Fix: a single authoritative source of truth inside the activity. The activity now reconciles both to one object (`state.plan` when present, else `plan`), updates that object's task, sets `state.plan` and the returned `plan` to the same object, and persists both from that single source. No file write is skipped; retry semantics are unchanged.
+- **Invariants preserved:** `attempt` increments only on `READY -> RUNNING`; `FAILED -> READY` does not increment; `max_attempts` remains authoritative; Human Gate and `RETRY_ONCE` behavior unchanged.
+- **Completion criterion:** After `persist_retry_state_activity` under independent (serialized) arguments, `state.json.plan.tasks[T].{status,attempt,max_attempts} == plan.json.tasks[T].{status,attempt,max_attempts}`, and the returned objects are consistent. The next `READY -> RUNNING` increments `attempt` exactly once.
+- **Regression test:** `tests/test_f2_retry_state_consistency.py` forces an independent JSON round-trip of activity arguments (as Temporal does), calls the real activity, and reads back the persisted `state.json` and `plan.json`. This test fails on the unpatched code (`FAILED == READY`) and passes after the fix.
+- **Status:** DONE on branch `vibe/f2-retry-state-consistency-b6d6c2`. Resolves ONLY F2; does not resolve F3 (multi-file snapshot transactionality).
+
+### Open backlog (separate atomic tasks, not started)
+
+These items remain open and require their own atomic patches. They are NOT done.
+
+- **S1 — Human Gate audit EvidenceRecord ID uniqueness** (open). See section 12. Repeated `RETRY_ONCE` must never overwrite an earlier audit record.
+- **S2 — Initial M4 run log / persistence ordering consistency** (open, preexisting failing test). See section 12. `tests/test_fsasm_milestone_four.py::TestInitialPersistenceOrdering::test_initial_persistence_ordering_worker_level` still fails on the baseline and after F2; unrelated to F2.
+- **S3 — Human Gate audit payload completeness** (open). See section 12.
+- **S4 — Stale M4 comments/docstrings alignment** (open). See section 12.
+- **F3 — Multi-file snapshot transactionality** (open). `state.json` and `plan.json` consistency after an activity does NOT imply a transactional write of both files. A crash between the two writes can still leave them inconsistent. Separate atomic task; do not claim it is solved by F2.
+- **F4 — run_id reuse** (open). Separate atomic task.
+- **F5 — identifier validation in paths** (open). Separate atomic task.
+- **F6/F7 — evidence and Human Gate identifier contracts** (open). Overlaps with S1/S3; coordinate to avoid duplicate fixes. Separate atomic task.
+- **F8 — finalizer contract** (open). Separate atomic task.
+
+The historical code baseline `c47f356` (section 2) is preserved as the historical M4 implementation commit; it is not changed by this stabilization work.

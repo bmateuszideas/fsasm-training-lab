@@ -559,17 +559,31 @@ async def persist_retry_state_activity(
     """
     persistence = RuntimePersistence()
 
-    # Update plan to reflect task status
-    if plan is not None:
-        for plan_task in plan.tasks:
+    # Single source of truth: the authoritative plan lives on state.plan.
+    # Activity arguments cross the worker boundary via serialization, so `state`
+    # and `plan` arrive as independent copies; mutating the `plan` arg alone
+    # would leave state.plan (and thus state.json) stale relative to plan.json.
+    # Reconcile both to one object before persisting, then return that object.
+    if state.plan is None:
+        authoritative_plan = plan
+    else:
+        authoritative_plan = state.plan
+
+    if authoritative_plan is not None:
+        for plan_task in authoritative_plan.tasks:
             if plan_task.task_id == task.task_id:
                 plan_task.status = task.status
                 plan_task.attempt = task.attempt
 
-    # Persist state
+    # Keep state.plan and the returned plan as the same object so callers cannot
+    # observe divergence regardless of how they reference the plan.
+    state.plan = authoritative_plan
+    plan = authoritative_plan
+
+    # Persist state and plan from the single authoritative source.
     persistence.save_run_state(state)
-    if plan is not None:
-        persistence.save_plan(plan)
+    if authoritative_plan is not None:
+        persistence.save_plan(authoritative_plan)
 
     # Log retry
     persistence.save_run_log_entry(
