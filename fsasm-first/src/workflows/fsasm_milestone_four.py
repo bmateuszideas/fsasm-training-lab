@@ -682,6 +682,13 @@ async def validate_and_apply_human_decision_activity(
         )
 
     if decision.action == HumanDecisionAction.RETRY_ONCE:
+        # Capture the real pre-transition state snapshot before any mutation,
+        # so the audit records the actual values rather than reconstructed ones.
+        attempt_before = task.attempt
+        max_attempts_before = task.max_attempts
+        task_status_before = task.status.value
+        run_status_before = state.status.value
+
         # Apply human-authorized task transition: NEEDS_HUMAN -> READY
         task = apply_human_authorized_task_transition(
             task, TaskStatus.READY, new_max_attempts=task.attempt + 1
@@ -707,6 +714,12 @@ async def validate_and_apply_human_decision_activity(
         if state.plan is not None:
             persistence.save_plan(state.plan)
 
+        # Read the real post-transition values from the actual objects.
+        attempt_after = task.attempt
+        max_attempts_after = task.max_attempts
+        task_status_after = task.status.value
+        run_status_after = state.status.value
+
         # Persist Human Gate audit evidence.
         # RETRY_ONCE does not reset task.attempt, so task.attempt at decision
         # time equals the execution attempt that just failed. It therefore
@@ -726,13 +739,14 @@ async def validate_and_apply_human_decision_activity(
                 "action": "RETRY_ONCE",
                 "reason": decision.reason,
                 "task_id": task.task_id,
-                "attempt_before": task.attempt,
-                "max_attempts_before": task.attempt,
-                "max_attempts_after": task.max_attempts,
-                "task_status_before": "NEEDS_HUMAN",
-                "task_status_after": task.status.value,
-                "run_status_before": "NEEDS_HUMAN",
-                "run_status_after": state.status.value,
+                "attempt_before": attempt_before,
+                "attempt_after": attempt_after,
+                "max_attempts_before": max_attempts_before,
+                "max_attempts_after": max_attempts_after,
+                "task_status_before": task_status_before,
+                "task_status_after": task_status_after,
+                "run_status_before": run_status_before,
+                "run_status_after": run_status_after,
                 "active_task_id": state.active_task_id,
             },
         )
@@ -754,6 +768,13 @@ async def validate_and_apply_human_decision_activity(
         )
 
     elif decision.action == HumanDecisionAction.ABORT:
+        # Capture the real pre-transition state snapshot before any mutation,
+        # so the audit records the actual values rather than reconstructed ones.
+        attempt_before = task.attempt
+        max_attempts_before = task.max_attempts
+        task_status_before = task.status.value
+        run_status_before = state.status.value
+
         # Apply human-authorized task transition: NEEDS_HUMAN -> FAILED
         task = apply_human_authorized_task_transition(task, TaskStatus.FAILED)
 
@@ -780,6 +801,12 @@ async def validate_and_apply_human_decision_activity(
         if state.plan is not None:
             persistence.save_plan(state.plan)
 
+        # Read the real post-transition values from the actual objects.
+        attempt_after = task.attempt
+        max_attempts_after = task.max_attempts
+        task_status_after = task.status.value
+        run_status_after = state.status.value
+
         # Persist Human Gate audit evidence
         audit_evidence = EvidenceRecord(
             evidence_id=f"evidence-human-gate-abort-{state.run_id}-{task.task_id}",
@@ -791,12 +818,14 @@ async def validate_and_apply_human_decision_activity(
                 "action": "ABORT",
                 "reason": decision.reason,
                 "task_id": task.task_id,
-                "attempt": task.attempt,
-                "max_attempts": task.max_attempts,
-                "task_status_before": "NEEDS_HUMAN",
-                "task_status_after": task.status.value,
-                "run_status_before": "NEEDS_HUMAN",
-                "run_status_after": state.status.value,
+                "attempt_before": attempt_before,
+                "attempt_after": attempt_after,
+                "max_attempts_before": max_attempts_before,
+                "max_attempts_after": max_attempts_after,
+                "task_status_before": task_status_before,
+                "task_status_after": task_status_after,
+                "run_status_before": run_status_before,
+                "run_status_after": run_status_after,
                 "active_task_id": state.active_task_id,
             },
         )
