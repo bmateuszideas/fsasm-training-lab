@@ -70,22 +70,44 @@ def _validate_finalization_inputs(
             field="active_task_id",
             value=state.active_task_id,
         )
-    # The task must belong to the authoritative plan when a plan is present.
-    if state.plan is not None:
-        plan_task_ids = {t.task_id for t in state.plan.tasks}
-        if task.task_id not in plan_task_ids:
-            raise ValidationError(
-                "Finalized task does not belong to the authoritative plan",
-                field="task_id",
-                value=task.task_id,
-            )
-        plan_task = next(t for t in state.plan.tasks if t.task_id == task.task_id)
-        if plan_task.task_id != task.task_id:
-            raise ValidationError(
-                "Authoritative plan task identity disagrees with finalized task",
-                field="task_id",
-                value=plan_task.task_id,
-            )
+    # Authoritative execution context: the run must be RUNNING, a plan must
+    # exist, the supplied task must belong to that plan, and the independently
+    # supplied task must agree with the authoritative plan task on execution
+    # state (status RUNNING and attempt). The task and plan task are separate
+    # objects after the activity serialization boundary, so they are compared
+    # by value, not by shared object identity.
+    if state.status != RunStatus.RUNNING:
+        raise ValidationError(
+            "RunState must be RUNNING to finalize a task",
+            field="state.status",
+            value=state.status.value,
+        )
+    if state.plan is None:
+        raise ValidationError(
+            "RunState must have an authoritative plan to finalize a task",
+            field="plan",
+            value=None,
+        )
+    plan_task_ids = {t.task_id for t in state.plan.tasks}
+    if task.task_id not in plan_task_ids:
+        raise ValidationError(
+            "Finalized task does not belong to the authoritative plan",
+            field="task_id",
+            value=task.task_id,
+        )
+    plan_task = next(t for t in state.plan.tasks if t.task_id == task.task_id)
+    if plan_task.status != TaskStatus.RUNNING:
+        raise ValidationError(
+            "Authoritative plan task must be RUNNING for finalization",
+            field="plan_task.status",
+            value=plan_task.status.value,
+        )
+    if plan_task.attempt != task.attempt:
+        raise ValidationError(
+            "Authoritative plan task attempt disagrees with supplied task attempt",
+            field="plan_task.attempt",
+            value=plan_task.attempt,
+        )
 
     # Every supplied evidence record must belong to the authoritative run/task.
     for evidence in evidence_records:
