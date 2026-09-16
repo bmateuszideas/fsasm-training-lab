@@ -1,0 +1,136 @@
+name: CI - fsasm-experimental
+
+on:
+  push:
+    branches:
+      - Fsasm-experimental
+  pull_request:
+    branches:
+      - Fsasm-experimental
+
+jobs:
+  lint-format:
+    name: Lint & Format Check (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: Fsasm-experimental
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        working-directory: ./fsasm-first
+        run: uv sync
+
+      - name: Lint with ruff
+        working-directory: ./fsasm-first
+        run: uv run ruff check src/workflows/ src/fsasm/
+
+      - name: Format check with ruff
+        working-directory: ./fsasm-first
+        run: uv run ruff format --check src/workflows/ src/fsasm/
+
+  typecheck:
+    name: Type Check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: Fsasm-experimental
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        working-directory: ./fsasm-first
+        run: uv sync
+
+      - name: Type check with mypy
+        working-directory: ./fsasm-first
+        run: uv run mypy src/workflows/ src/fsasm/
+
+  workflow-lint:
+    name: Workflow Lint (semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: Fsasm-experimental
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        working-directory: ./fsasm-first
+        run: uv sync
+
+      - name: Lint workflows with semgrep
+        working-directory: ./fsasm-first
+        run: uv run semgrep --config .agents/skills/workflows/scripts/linting/rules/ --quiet src/workflows/ src/fsasm/
+
+  test:
+    name: Unit Tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: Fsasm-experimental
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        working-directory: ./fsasm-first
+        run: uv sync
+
+      - name: Run tests with pytest
+        working-directory: ./fsasm-first
+        run: uv run pytest -v
+
+  all-checks:
+    name: All Checks Passed
+    needs: [lint-format, typecheck, workflow-lint, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check job statuses
+        run: |
+          if [[ "${{ needs.lint-format.result }}" != "success" ]]; then
+            echo "❌ Lint & Format Check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.typecheck.result }}" != "success" ]]; then
+            echo "❌ Type Check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.workflow-lint.result }}" != "success" ]]; then
+            echo "❌ Workflow Lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "❌ Tests failed"
+            exit 1
+          fi
+          echo "✅ All checks passed!"
