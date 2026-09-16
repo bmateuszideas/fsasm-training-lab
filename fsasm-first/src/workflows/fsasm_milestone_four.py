@@ -278,7 +278,8 @@ async def persist_initial_state_activity(
         failed_task_ids=[],
     )
 
-    # Save plan (with default max_attempts, will be updated by set_task_max_attempts_activity)
+    # Save plan - authoritative max_attempts was already set by
+    # set_task_max_attempts_activity before this activity ran.
     persistence.save_plan(plan)
 
     # Save state with PLANNED status
@@ -298,14 +299,15 @@ async def persist_initial_state_activity(
     )
     persistence.save_evidence(proposal_evidence)
 
-    # Log the creation
+    # Log the creation - report the actually persisted initial status (PLANNED),
+    # not RUNNING. PLANNED -> RUNNING happens later during prepare_task_activity.
     persistence.save_run_log_entry(
         run_id,
         {
             "event": "m4_run_started",
             "run_id": run_id,
             "goal": goal_input.goal,
-            "status": RunStatus.RUNNING.value,
+            "status": state.status.value,
             "planner_provider": metadata.provider,
             "timestamp": state.created_at,
         },
@@ -935,8 +937,8 @@ class FsasmMilestoneFourWorkflow:
     1. Validate configuration
     2. Create/normalize input
     3. Planner activity (Mistral or Stub backend)
-    4. Persist initial state (PLANNED -> RUNNING)
-    5. Set task.max_attempts from workflow config (authoritative budget)
+    4. Set task.max_attempts from workflow config (authoritative budget)
+    5. Persist initial state (PLANNED, with authoritative max_attempts already set)
     6. Execute ONE task (TASK-001 only) with retry loop:
        a. Prepare task (READY -> RUNNING, increments attempt exactly once)
        b. Execute task (produces ExecutorOutput)
