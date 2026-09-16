@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,171 @@ from fsasm.models import (
     RunState,
     VerificationResult,
 )
-from fsasm.errors import PersistenceError
+from fsasm.errors import InvalidIdentifierError, PersistenceError
+
+
+# =============================================================================
+# F5 FILESYSTEM IDENTIFIER SAFETY POLICY
+# =============================================================================
+#
+# Centralized policy for untrusted ``run_id`` / ``evidence_id`` identifiers that
+# derive filesystem paths. Validation is enforced by the persistence boundary
+# before any identifier-derived directory or file is touched, so direct
+# callers cannot bypass it even when the domain models happen to accept the
+# same string.
+#
+# Policy goals:
+#   * accept existing generated UUIDs and conventional FS-ASM IDs
+#     (letters, digits, ``-`` and ``_``);
+#   * reject empty/whitespace, ``/`` and ``\`` separators, absolute/drive/UNC
+#     input, ``.`` / ``..``, null bytes and other control characters;
+#   * reject identifiers exceeding the length limit (leaving room for the
+#     ``.json`` suffix and a component length budget);
+#   * reject Windows-reserved filenames for cross-platform safety;
+#   * behave consistently on Linux and Windows.
+
+MAX_IDENTIFIER_LENGTH = 200
+
+# Conservative ASCII allowlist: letters, digits, hyphen, underscore.
+# Conventional FS-ASM IDs (``run-123``, ``evidence-m3-execution-...``,
+# UUIDs) use only these characters. No separators or traversal chars.
+_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_-]+\Z")
+
+# Windows-reserved device/file names (case-insensitive), with or without an
+# extension. Rejecting them keeps the allowlist cross-platform safe.
+_WINDOWS_RESERVED = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+}
+
+
+def _validate_identifier(identifier: str, kind: str) -> None:
+    """Raise ``InvalidIdentifierError`` if ``identifier`` is path-unsafe.
+
+    ``kind`` is used only for the error message (e.g. "run_id").
+    """
+    if not isinstance(identifier, str):
+        raise InvalidIdentifierError(
+            f"{kind} must be a non-empty string", identifier=str(identifier)
+        )
+    stripped = identifier.strip()
+    if not stripped:
+        raise InvalidIdentifierError(
+            f"{kind} cannot be empty or whitespace-only", identifier=identifier
+        )
+    # Reject the raw identifier if it has leading/trailing whitespace; the
+    # allowlist below already excludes most whitespace, but be explicit.
+    if identifier != stripped:
+        raise InvalidIdentifierError(
+            f"{kind} cannot have leading or trailing whitespace",
+            identifier=identifier,
+        )
+    if len(identifier) > MAX_IDENTIFIER_LENGTH:
+        raise InvalidIdentifierError(
+            f"{kind} exceeds the length limit ({MAX_IDENTIFIER_LENGTH})",
+            identifier=identifier,
+        )
+    # Null bytes and control characters are path-unsafe; reject explicitly.
+    if any(ord(c) < 32 for c in identifier):
+        raise InvalidIdentifierError(
+            f"{kind} contains control characters", identifier=identifier
+        )
+    # Reject path separators and traversal regardless of platform.
+    if "/" in identifier or "\\" in identifier:
+        raise InvalidIdentifierError(
+            f"{kind} contains a path separator", identifier=identifier
+        )
+    if identifier in (".", ".."):
+        raise InvalidIdentifierError(
+            f"{kind} cannot be a path traversal component", identifier=identifier
+        )
+    if os.path.isabs(identifier):
+        raise InvalidIdentifierError(
+            f"{kind} cannot be an absolute path", identifier=identifier
+        )
+    if not _IDENTIFIER_PATTERN.match(identifier):
+        raise InvalidIdentifierError(
+            f"{kind} contains disallowed characters", identifier=identifier
+        )
+    stem = identifier.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED:
+        raise InvalidIdentifierError(
+            f"{kind} uses a Windows-reserved name", identifier=identifier
+        )
+
+
+def _ensure_contained(
+    resolved: Path, root: Path, *, allow_symlink: bool = False
+) -> None:
+    """Validate that ``resolved`` stays within ``root`` after resolution.
+
+    ``resolved`` is the path as it would be used (parent directories may not yet
+    exist). ``root`` is the authorized boundary (e.g. ``runs_dir`` or an evidence
+    dir). When ``allow_symlink`` is False (the safe default), an existing
+    symlink at the run directory, evidence directory, or destination-file
+    level is rejected so that an operation cannot follow a pre-existing link
+    to another run or an external location.
+
+    This is a containment + symlink-isolation check, not a TOCTOU-hardened
+    sandbox. See the F5 limitation note in PROJECT_STATUS.md.
+    """
+    try:
+        root_real = root.resolve(strict=False)
+        resolved_real = resolved.resolve(strict=False)
+    except OSError as exc:
+        raise InvalidIdentifierError(
+            f"path resolution failed for {resolved}", identifier=str(resolved)
+        ) from exc
+
+    try:
+        resolved_real.relative_to(root_real)
+    except ValueError as exc:
+        raise InvalidIdentifierError(
+            f"path {resolved} escapes the authorized root {root}",
+            identifier=str(resolved),
+        ) from exc
+
+    if allow_symlink:
+        return
+
+    if os.path.islink(resolved):
+        raise InvalidIdentifierError(
+            f"path {resolved} is a symlink and may redirect outside {root}",
+            identifier=str(resolved),
+        )
+    if os.path.islink(root):
+        raise InvalidIdentifierError(
+            f"authorized root {root} is a symlink and may redirect operations",
+            identifier=str(root),
+        )
+    for parent in [resolved, *list(resolved.parents)]:
+        if parent == root or root in parent.parents:
+            if os.path.islink(parent):
+                raise InvalidIdentifierError(
+                    f"path component {parent} is a symlink and may redirect "
+                    f"operations outside {root}",
+                    identifier=str(parent),
+                )
 
 
 # =============================================================================
@@ -80,25 +245,65 @@ class RuntimePersistence:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
 
+    # --------------------------------------------------------------------
+    # F5 identifier validation + path containment
+    # --------------------------------------------------------------------
+
+    def _validate_run_id(self, run_id: str) -> None:
+        """Validate ``run_id`` and raise ``InvalidIdentifierError`` if unsafe."""
+        _validate_identifier(run_id, "run_id")
+
+    def _validate_evidence_id(self, evidence_id: str) -> None:
+        """Validate ``evidence_id`` and raise ``InvalidIdentifierError`` if unsafe."""
+        _validate_identifier(evidence_id, "evidence_id")
+
     def _get_run_dir(self, run_id: str) -> Path:
-        """Get the directory for a specific run."""
-        return self.runs_dir / run_id
+        """Get the directory for a specific run.
+
+        Validates the identifier and rejects run-directory symlinks that would
+        redirect operations into another run or outside ``runs_dir``, even when
+        the symlink target stays inside ``runs_dir``.
+        """
+        self._validate_run_id(run_id)
+        run_dir = self.runs_dir / run_id
+        _ensure_contained(run_dir, self.runs_dir)
+        return run_dir
 
     def _get_state_path(self, run_id: str) -> Path:
         """Get the path to the state.json file for a run."""
-        return self._get_run_dir(run_id) / DEFAULT_STATE_FILE
+        run_dir = self._get_run_dir(run_id)
+        path = run_dir / DEFAULT_STATE_FILE
+        _ensure_contained(path, run_dir)
+        return path
 
     def _get_plan_path(self, run_id: str) -> Path:
         """Get the path to the plan.json file for a run."""
-        return self._get_run_dir(run_id) / DEFAULT_PLAN_FILE
+        run_dir = self._get_run_dir(run_id)
+        path = run_dir / DEFAULT_PLAN_FILE
+        _ensure_contained(path, run_dir)
+        return path
 
     def _get_evidence_dir(self, run_id: str) -> Path:
         """Get the evidence directory for a run."""
-        return self._get_run_dir(run_id) / DEFAULT_EVIDENCE_DIR
+        run_dir = self._get_run_dir(run_id)
+        evidence_dir = run_dir / DEFAULT_EVIDENCE_DIR
+        _ensure_contained(evidence_dir, run_dir)
+        return evidence_dir
+
+    def _get_evidence_path(self, run_id: str, evidence_id: str) -> Path:
+        """Get the path to a specific evidence file."""
+        self._validate_evidence_id(evidence_id)
+        evidence_dir = self._get_evidence_dir(run_id)
+        path = evidence_dir / f"{evidence_id}.json"
+        _ensure_contained(path, evidence_dir)
+        return path
 
     def _get_run_log_path(self, run_id: str) -> Path:
         """Get the path to the run.log.jsonl file for a run."""
-        return self._get_run_dir(run_id) / DEFAULT_RUN_LOG_FILE
+        run_dir = self._get_run_dir(run_id)
+        path = run_dir / DEFAULT_RUN_LOG_FILE
+        _ensure_contained(path, run_dir)
+        return path
 
     # =========================================================================
     # ATOMIC WRITE HELPERS
@@ -259,9 +464,10 @@ class RuntimePersistence:
         Raises:
             PersistenceError: If save fails.
         """
+        self._validate_evidence_id(evidence.evidence_id)
         evidence_dir = self._get_evidence_dir(evidence.run_id)
         evidence_dir.mkdir(parents=True, exist_ok=True)
-        path = evidence_dir / f"{evidence.evidence_id}.json"
+        path = self._get_evidence_path(evidence.run_id, evidence.evidence_id)
         self._atomic_write_json(path, evidence)
 
     def save_verification_result(self, result: VerificationResult) -> None:
@@ -363,8 +569,7 @@ class RuntimePersistence:
         Raises:
             PersistenceError: If load fails.
         """
-        evidence_dir = self._get_evidence_dir(run_id)
-        path = evidence_dir / f"{evidence_id}.json"
+        path = self._get_evidence_path(run_id, evidence_id)
         if not path.exists():
             return None
         try:
@@ -394,12 +599,19 @@ class RuntimePersistence:
 
         records = []
         for path in evidence_dir.glob("*.json"):
+            # Validate each discovered path with the F5 containment/symlink
+            # mechanism BEFORE opening it. A symlinked evidence file could
+            # otherwise redirect reads into another run or outside the
+            # authorized evidence directory. This security check is kept
+            # OUTSIDE the broad exception handler below so a security
+            # rejection is never silently swallowed as a malformed file.
+            _ensure_contained(path, evidence_dir)
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 records.append(EvidenceRecord(**data))
             except Exception:
-                # Skip invalid files
+                # Skip invalid (non-symlink) JSON files only.
                 continue
         return records
 

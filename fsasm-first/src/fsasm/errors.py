@@ -79,6 +79,23 @@ class PlanValidationError(FSASMError):
         super().__init__(message, {"plan_id": plan_id})
 
 
+class InvalidIdentifierError(FSASMError):
+    """Raised when an untrusted filesystem identifier is unsafe.
+
+    Raised by the persistence boundary before any identifier-derived filesystem
+    side effect when a ``run_id`` or ``evidence_id`` is empty, contains path
+    separators, traversal components, an absolute/drive/UNC prefix, null bytes,
+    other path-unsafe characters, exceeds the length limit, or uses a
+    Windows-reserved name. This is a path-safety boundary error, distinct from
+    a malformed domain object: persistence enforces its own boundary even when
+    called directly.
+    """
+
+    def __init__(self, message: str, identifier: str | None = None) -> None:
+        self.identifier = identifier
+        super().__init__(message, {"identifier": identifier})
+
+
 class PersistenceError(FSASMError):
     """Raised when persistence operations fail."""
 
