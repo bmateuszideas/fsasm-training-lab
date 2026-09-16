@@ -1,193 +1,42 @@
 # FS-ASM Training Lab
 
-**FS-ASM (File System as State Machine)** to projekt badawczo-edukacyjny rozwijający koncepcję trwałego, zewnętrznego stanu dla agentów AI oraz deterministycznego runtime'u kontrolującego ich pracę.
+**FS-ASM — File System as State Machine** is a research/education project for an external, persistent state machine controlling AI-agent work. Historical meaning and long-term architecture are documented separately from the current implementation. Core principle: **deterministic code owns state, transitions, permissions and verification; replaceable LLM components propose or perform bounded semantic work.** A model's claim of completion is not independent evidence.
 
-Projekt wyrósł z praktycznego workflow, w którym **ChatGPT pełnił rolę Plannera/Architekta, Codex w VS Code rolę Coding Executora, filesystem przechowywał stan i kontrakt wykonawczy, a człowiek ręcznie wykonywał orkiestrację i handoff**.
+> **START HERE — CURRENT STATUS:** [fsasm-first/PROJECT_STATUS.md](fsasm-first/PROJECT_STATUS.md). Read this dated snapshot, then check actual Git HEAD, merged PRs, source and CI. Do not rely on the README, an old chat, or a historical anchor as a live status feed.
 
-Obecny kierunek nie polega na odtwarzaniu starego FS-ASM 1:1. Celem jest przeniesienie jego najważniejszych zasad do współczesnej architektury agentowej, w której twarda logika jest egzekwowana przez kod, a modele LLM są wymiennymi komponentami poznawczymi.
+## Where things live
 
-## Główna idea
+| Path | Contents |
+| --- | --- |
+| [`fsasm-first/`](fsasm-first/) | Current Mistral Workflows training lab: runtime code, tests, operations and project governance |
+| [`fsasm-first/PROJECT_STATUS.md`](fsasm-first/PROJECT_STATUS.md) | **One current status/next-action snapshot** and open M4 stabilization queue |
+| [`fsasm-first/docs/DOCUMENTATION_MAP.md`](fsasm-first/docs/DOCUMENTATION_MAP.md) | Document roles, precedence, conflict resolution and context handoff |
+| [`fsasm-first/docs/BRANCH_POLICY.md`](fsasm-first/docs/BRANCH_POLICY.md) | Branch roles, atomic PRs, integration/release gates and non-destructive cleanup |
+| [`fsasm-first/docs/CURRENT_FSASM_MODEL.md`](fsasm-first/docs/CURRENT_FSASM_MODEL.md) | Approved long-term model and rationale, not a claim that future milestones exist |
+| [`fsasm-first/AGENTS.md`](fsasm-first/AGENTS.md) | Engineering contract and historical milestones; see current status for completed stages |
+| [`fsasm-first/IMPLEMENTATION_SUMMARY.md`](fsasm-first/IMPLEMENTATION_SUMMARY.md) | Milestone implementation reference, not live status after later PRs |
+| [`fsasm-first/CURRENT_DEVELOPMENT_ANCHOR.md`](fsasm-first/CURRENT_DEVELOPMENT_ANCHOR.md) | Dated historical running record, including superseded pause/LLMC instructions; **not an active command list** |
+| [`stare dokumenty rozwojowe fsasm/`](stare%20dokumenty%20rozwojowe%20fsasm/) | Deduplicated historical FS-ASM specifications and audits; preserve as research evidence |
 
-Najważniejsza zasada współczesnego FS-ASM:
+## Branches — do not confuse names with freshness
 
-> **Stan, kontrola i weryfikacja należą do systemu. LLM wykonuje ograniczone zadania wewnątrz reguł egzekwowanych przez runtime.**
+- **`Fsasm-experimental`**: active implementation/integration for the runtime, M4 stabilization in progress. New changes go via focused task branches and PRs, not direct changes to `main`.
+- **`main`**: GitHub default, but currently older/diverged for the runtime and contains historical LLMC benchmark work. It is **not** the latest release of the experimental runtime. Integration is a separate decision.
+- **`Fsasm-llmc-testingbranch`**: frozen research baseline. LLMC is deferred and not integrated into FS-ASM.
+- Other old `vibe/*` and check branches are cleanup candidates only after verifying ancestry/reference and explicit authorization. No automatic deletion, merge, force push or default-branch change.
 
-W praktyce oznacza to między innymi:
+See [branch policy](fsasm-first/docs/BRANCH_POLICY.md) for a dated inventory and process. GitHub may move after this document is written: always check the refs.
 
-- stan projektu poza kontekstem modelu,
-- atomowe `ChildTask` zamiast dużych, nieprecyzyjnych poleceń,
-- deterministyczne przejścia statusów,
-- bounded retry,
-- `Verification` i `Evidence` oddzielone od deklaracji modelu,
-- role takie jak `Planner`, `Executor` i `Verifier`,
-- `Human Gate` dla decyzji przekraczających zakres autonomii,
-- budowanie minimalnego kontekstu dla aktualnego taska,
-- możliwość używania różnych modeli zależnie od kosztu i kompetencji,
-- docelowo możliwość wykorzystania lokalnego, wyspecjalizowanego Coding Workera.
+## Implementation boundary — 16 September 2026 snapshot
 
-## Docelowy model
+M1, M2 and M3 are CLOSED. M4 has implemented bounded retries and a Workflows Human Gate; **M4 remains in stabilization, not CLOSED**. M5 Context Builder is NOT STARTED. The M4 executor is a deterministic STUB and performs exactly one selected ChildTask, possibly with retries; no real coding executor, independent test-artifact proof, complete plan execution or operational run recovery is implemented. Current detailed scope, accepted fixes and open F3–F8 tasks are in [PROJECT_STATUS](fsasm-first/PROJECT_STATUS.md). This is dated, not a substitute for checking current code.
 
-```text
-Human Goal
-    ↓
-FS-ASM Runtime / Orchestrator
-    ↓
-Planner
-    ↓
-Plan / Parent Tasks / Child Tasks
-    ↓
-Schema Validation
-    ↓
-Task Register + Persistent State
-    ↓
-Context Builder / Retrieval
-    ↓
-Executor
-    ↓
-Tools
-    ↓
-Result
-    ↓
-Verification + Evidence
-    ↓
-PASS / RETRY / ESCALATE / NEEDS_HUMAN
-    ↓
-Persistent State / Audit Log
-```
+## Development entry
 
-FS-ASM ma być możliwie **model-agnostic** i **framework-agnostic**. Mistral API i Mistral Workflows są obecnie naturalnym środowiskiem pierwszych eksperymentów, ale nie są docelowym ograniczeniem architektury.
+For a fresh coding model: read `PROJECT_STATUS.md`, confirm branch/HEAD, then read `docs/CURRENT_FSASM_MODEL.md`, stable rules in `AGENTS.md`, the documentation map and only the relevant files/tests for the approved atomic task. Read `fsasm-first/.agents/skills/workflows/SKILL.md` before touching the Mistral SDK. Do not start M5 or LLMC work from superseded instructions.
 
-## Repozytorium
+For installation, worker and test commands see [`fsasm-first/README.md`](fsasm-first/README.md). Do not use production runtime data as a pytest fixture; several legacy tests need further isolation.
 
-```text
-fsasm-training-lab/
-├── README.md
-├── fsasm-first/
-└── stare dokumenty rozwojowe fsasm/
-```
+## History and research
 
-### `fsasm-first/`
-
-Pierwszy poligon doświadczalny współczesnej implementacji FS-ASM.
-
-Zawiera środowisko oparte na Mistral Workflows, kod eksperymentalny, przykłady workflow oraz dokumenty używane podczas pierwszych prób implementacyjnych.
-
-To **nie jest całe FS-ASM** i nie należy traktować jego aktualnej struktury jako ostatecznej architektury projektu.
-
-### `stare dokumenty rozwojowe fsasm/`
-
-Zdeduplikowany zbiór historycznych wersji metodologii, specyfikacji, addendów, analiz porównawczych i materiałów pokazujących ewolucję koncepcji FS-ASM.
-
-Materiały wcześniej przechowywane osobno w katalogu `dokumentacja fsasm z clouda/` zostały porównane po blob SHA. Identyczne kopie usunięto, a jedyny unikalny artefakt przeniesiono do tego katalogu. Ten folder jest więc obecnie kanonicznym archiwum historycznym w repozytorium.
-
-Dokumenty historyczne są ważnym materiałem badawczym i źródłem historii projektu, ale **nie są aktualnymi instrukcjami implementacyjnymi**.
-
-## Aktualny status
-
-Projekt znajduje się na granicy pomiędzy:
-
-```text
-rekonstrukcją i audytem historycznego FS-ASM
-                     ↓
-pierwszą właściwą implementacją deterministycznego runtime'u
-```
-
-Najbliższy etap nie polega na budowaniu rozbudowanego systemu multi-agentowego.
-
-Najpierw ma powstać mały, testowalny rdzeń bez LLM:
-
-- `GoalInput`,
-- `Plan`,
-- `ChildTask`,
-- `VerificationResult`,
-- `EvidenceRecord`,
-- `RunState`,
-- walidacja schematów,
-- dozwolone state transitions,
-- persistent JSON state,
-- bounded retry,
-- unit tests.
-
-Pierwszy milestone:
-
-```text
-Goal
-↓
-Planner Stub
-↓
-3 ChildTasks
-↓
-Schema Validation
-↓
-RunState JSON
-↓
-Verification
-↓
-EvidenceRecord
-↓
-PASS / FAIL
-```
-
-Dopiero po działaniu tej ścieżki będą kolejno dokładane:
-
-1. prawdziwy Planner przez Mistral API,
-2. Executor,
-3. Verifier i retry loop,
-4. Human Gate,
-5. Context Builder i retrieval,
-6. lokalny wyspecjalizowany Coding Worker,
-7. routing modeli i eskalacja,
-8. eksperymenty porównawcze,
-9. ewentualny fine-tuning własnego FS-ASM Workera,
-10. późniejsze opakowanie systemu jako plugin / integracja z ChatGPT.
-
-## Zasady projektowe
-
-1. **Stan należy do systemu, nie do LLM-a.**
-2. **LLM może być stateless workerem.**
-3. **Task powinien być możliwie atomowy.**
-4. **Kod egzekwuje wszystko, co może zostać rozstrzygnięte deterministycznie.**
-5. **Deklaracja modelu nie jest dowodem wykonania.**
-6. **PASS wymaga Verification i Evidence.**
-7. **Retry musi być ograniczone.**
-8. **Model dostaje kontekst potrzebny do aktualnego taska, a nie cały projekt.**
-9. **Planner i Executor mają różne odpowiedzialności i rozdzielone konteksty.**
-10. **System może korzystać z wielu modeli i dobierać najtańszy wystarczająco kompetentny model do danego kroku.**
-11. **Mocniejszy model może być eskalacją zamiast domyślnym wykonawcą każdego zadania.**
-12. **Człowiek pozostaje Human Gate tam, gdzie kończy się bezpieczna autonomia systemu.**
-
-## Dokumentacja historyczna a aktualna architektura
-
-Historyczne dokumenty są zachowywane po to, aby:
-
-- odtworzyć genezę koncepcji,
-- porównywać kolejne rozwiązania,
-- identyfikować mechanizmy, które przetrwały ewolucję projektu,
-- prowadzić audyt decyzji projektowych.
-
-Nie należy jednak implementować starej wersji tylko dlatego, że znajduje się w repozytorium.
-
-Przy konflikcie pomiędzy dokumentacją historyczną a aktualnym kierunkiem projektu pierwszeństwo ma **bieżący model projektu i aktualny kod eksperymentalny**.
-
-## Dalsze porządkowanie repozytorium
-
-Docelowo warto rozdzielić repo na czytelne warstwy:
-
-```text
-fsasm-training-lab/
-├── README.md
-├── CURRENT_FSASM_MODEL.md        # aktualny source of truth
-├── docs/
-│   ├── history/                  # zachowane wersje historyczne
-│   ├── audits/                   # analizy i rekonstrukcje
-│   └── research/                 # materiały pomocnicze
-├── experiments/
-│   └── fsasm-first/              # pierwszy poligon implementacyjny
-└── ...                           # przyszły aktywny runtime
-```
-
-Porządkowanie dokumentacji nie powinno oznaczać kasowania historii. Warto ją zachować, ale wyraźnie oddzielić od dokumentów sterujących aktualnym rozwojem.
-
----
-
-**FS-ASM Training Lab** jest miejscem, w którym historyczna idea filesystemu jako zewnętrznej maszyny stanu jest przekształcana w rzeczywisty, testowalny runtime dla współczesnych agentów AI.
+FS-ASM evolved from a human-mediated Planner (ChatGPT) → filesystem handoff → Coding Executor (Codex) workflow. The historical archive preserves those iterations; they are not instructions to reimplement old FS-ASM literally. LLMC results are on `main` under `fsasm-first/llmc-benchmark/`; the benchmark has known scoring/corpus methodology limitations, is not a proven runtime dependency, and future adoption requires a separate decision. Earlier versions of this README and the anchor remain available in Git history.
