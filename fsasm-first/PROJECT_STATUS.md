@@ -45,9 +45,11 @@ These were the three persistent refs after user cleanup and before temporary doc
 | F4 | Explicit new-run creation vs reuse/resumption of `run_id` | OPEN |
 | F5 | Safe identifiers in filesystem paths | OPEN |
 | F6/F7 | Remaining evidence/gate identity and duplicate/stale/multiple signal handling | OPEN beyond S1 |
-| F8 | Finalizer verifies authoritative run/task, checks and evidence before PASS | OPEN |
+| F8 | Finalizer verifies authoritative run/task, checks and evidence before PASS | IMPLEMENTED — READY FOR EXTERNAL REVIEW (draft PR; not merged) |
 
 The open items are documented issues/risks from the 2026-09-16 reviews, **not** proof that every reproducer was rerun in the present session. Verify the selected issue against current source/tests before modifying code. Do not declare an item DONE from a model summary alone.
+
+**F8 verification (2026-09-16):** Implemented on branch `task/f8-finalizer-contract` from `Fsasm-experimental` HEAD `d6548b73af284a05e02f2c178bdc1d85006f7dfc`. `finalize_task_activity` now validates verification identity (`run_id`/`task_id`), RUNNING/active-task context, plan membership, evidence ownership, and (for PASS) nonempty all-passed checks + nonempty evidence before any side effect; invalid input fails closed via `ValidationError` with no state mutation or persistence. Reproducer `tests/test_f8_finalizer_contract.py` (10 tests) fails on the unpatched finalizer (7 failures) and passes after the fix. Local: `uv run pytest` → 309 passed, 3 skipped, 0 failed; `make check` clean; `git diff --check` clean. F8 is **IMPLEMENTED — READY FOR EXTERNAL REVIEW**; pending external review and CI at the PR head. Not DONE; M4 is NOT CLOSED.
 
 ## NEXT ACTION — stable post-documentation work scope
 

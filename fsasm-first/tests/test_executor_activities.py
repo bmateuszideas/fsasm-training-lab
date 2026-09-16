@@ -18,6 +18,7 @@ from fsasm.models import (
     VerificationSpec,
     VerificationType,
 )
+from fsasm.models import VerificationCheck
 from fsasm.executor_activities import (
     execute_task_activity,
     validate_executor_output_provenance_activity,
@@ -672,7 +673,9 @@ class TestFinalizeTaskActivity:
             run_id="test-run",
             task_id="TASK-001",
             status=VerificationResultStatus.PASS,
-            checks=[],
+            checks=[
+                VerificationCheck(check_name="schema", passed=True, message="ok"),
+            ],
             message="PASS",
         )
         evidence_records = [

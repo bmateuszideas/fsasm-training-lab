@@ -7,7 +7,11 @@ from mistralai.workflows import activity
 
 # Import fsasm modules - these are used in activities, not workflow code
 with workflows.workflow.unsafe.imports_passed_through():
-    from fsasm.errors import ConfigurationError, ProvenanceValidationError
+    from fsasm.errors import (
+        ConfigurationError,
+        ProvenanceValidationError,
+        ValidationError,
+    )
     from fsasm.models import (
         ChildTask,
         ExecutorBackend,
@@ -25,6 +29,100 @@ with workflows.workflow.unsafe.imports_passed_through():
     from fsasm.persistence import RuntimePersistence
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_finalization_inputs(
+    state: RunState,
+    task: ChildTask,
+    verification_result: VerificationResult,
+    evidence_records: list[EvidenceRecord],
+) -> None:
+    """Validate finalization inputs before any side effect.
+
+    Enforces the F8 finalizer contract: the verification result and evidence
+    must belong to the authoritative run and task, the task must be the active
+    RUNNING task, and (for a PASS) the checks and evidence must be internally
+    consistent. Rejects invalid or contradictory input by raising before any
+    task/state mutation or persistence.
+    """
+    # Identity and execution context.
+    if verification_result.run_id != state.run_id:
+        raise ValidationError(
+            "VerificationResult run_id does not match authoritative RunState",
+            field="run_id",
+            value=verification_result.run_id,
+        )
+    if verification_result.task_id != task.task_id:
+        raise ValidationError(
+            "VerificationResult task_id does not match finalized task",
+            field="task_id",
+            value=verification_result.task_id,
+        )
+    if task.status != TaskStatus.RUNNING:
+        raise ValidationError(
+            "Task must be RUNNING to be finalized",
+            field="task.status",
+            value=task.status.value,
+        )
+    if state.active_task_id != task.task_id:
+        raise ValidationError(
+            "RunState.active_task_id does not identify the finalized task",
+            field="active_task_id",
+            value=state.active_task_id,
+        )
+    # The task must belong to the authoritative plan when a plan is present.
+    if state.plan is not None:
+        plan_task_ids = {t.task_id for t in state.plan.tasks}
+        if task.task_id not in plan_task_ids:
+            raise ValidationError(
+                "Finalized task does not belong to the authoritative plan",
+                field="task_id",
+                value=task.task_id,
+            )
+        plan_task = next(t for t in state.plan.tasks if t.task_id == task.task_id)
+        if plan_task.task_id != task.task_id:
+            raise ValidationError(
+                "Authoritative plan task identity disagrees with finalized task",
+                field="task_id",
+                value=plan_task.task_id,
+            )
+
+    # Every supplied evidence record must belong to the authoritative run/task.
+    for evidence in evidence_records:
+        if evidence.run_id != state.run_id:
+            raise ValidationError(
+                "EvidenceRecord run_id does not match authoritative run",
+                field="evidence.run_id",
+                value=evidence.run_id,
+            )
+        if evidence.task_id != task.task_id:
+            raise ValidationError(
+                "EvidenceRecord task_id does not match finalized task",
+                field="evidence.task_id",
+                value=evidence.task_id,
+            )
+
+    # Internal verification consistency only for PASS.
+    if verification_result.status == VerificationResultStatus.PASS:
+        checks = verification_result.checks
+        if len(checks) == 0:
+            raise ValidationError(
+                "PASS requires at least one VerificationCheck",
+                field="checks",
+                value=checks,
+            )
+        if not all(c.passed for c in checks):
+            raise ValidationError(
+                "PASS result contains a failed VerificationCheck",
+                field="checks",
+                value=checks,
+            )
+        if len(evidence_records) == 0:
+            raise ValidationError(
+                "PASS requires nonempty task execution evidence",
+                field="evidence_records",
+                value=evidence_records,
+            )
 
 
 # =============================================================================
@@ -374,6 +472,13 @@ async def finalize_task_activity(
     Returns:
         Tuple of (updated RunState, updated ChildTask).
     """
+    # F8: validate identity, execution context, checks and evidence before any
+    # side effect. Invalid or contradictory input fails closed here; no task
+    # status mutation, no completed/failed collection mutation, no state or
+    # plan overwrite, and no evidence/verification persistence occurs for a
+    # rejected call.
+    _validate_finalization_inputs(state, task, verification_result, evidence_records)
+
     persistence = RuntimePersistence()
 
     # Determine final task status from verification
