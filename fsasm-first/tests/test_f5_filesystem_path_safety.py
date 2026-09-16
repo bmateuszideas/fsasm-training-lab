@@ -54,9 +54,7 @@ def _make_plan(run_id: str) -> Plan:
             title=f"Task {i}",
             description=f"Description {i}",
             status=TaskStatus.PENDING,
-            verification=VerificationSpec(
-                type=VerificationType.SCHEMA, expected="ok"
-            ),
+            verification=VerificationSpec(type=VerificationType.SCHEMA, expected="ok"),
         )
         for i in range(1, 4)
     ]
@@ -385,9 +383,7 @@ class TestRunDirectorySymlinkIsolation:
         real_run = "run-real-ev"
         alias = "run-alias-ev"
         persistence.save_run_state(_make_state(real_run))
-        os.symlink(
-            persistence.runs_dir / real_run, persistence.runs_dir / alias
-        )
+        os.symlink(persistence.runs_dir / real_run, persistence.runs_dir / alias)
         with pytest.raises(InvalidIdentifierError):
             persistence.save_evidence(_make_evidence(alias, "evidence-1"))
 
