@@ -1,57 +1,23 @@
-# Session Handoff
+# Handoff jednej sesji Vibe — tylko konkretne zadanie
 
-Use when a coding session approaches context limits, must stop, or a fresh agent will continue work. Enable continuation **without chat history** while avoiding a second global project-status document.
+Stosuj, gdy kończy się kontekst albo pracę ma kontynuować nowa sesja. **Repozytoryjny status i następna decyzja są tylko w [`repository-handoff.md`](repository-handoff.md)**; nie zakładaj drugiego globalnego `HANDOFF.md` ani nie aktualizuj historycznych snapshotów.
 
-## Before handoff
+Przed przekazaniem zweryfikuj branch i HEAD, `git status --short`, diff, odpowiednie testy, push i PR. Zapisuj rzeczywiście wykonane czynności, nie obietnice.
 
-1. Stop at a safe boundary; never intentionally leave syntax-broken committed files.
-2. Run the smallest relevant verification and record real results.
-3. Inspect `git status --short`, `git diff --stat`, current branch and HEAD.
-4. Determine which work is committed, pushed or only present in the current sandbox.
-5. Check the current task PR and `fsasm-first/PROJECT_STATUS.md` independently.
-
-## Persist in the right place
-
-Prefer the repository-defined task handoff location when one exists. Otherwise put a concise handoff **in the task PR description/comment or a task-branch-local `HANDOFF.md`**. Do not commit an evergreen root `HANDOFF.md` to `Fsasm-experimental`, append a new 'current stop point' to the historical anchor, or overwrite `PROJECT_STATUS.md` with temporary session notes. If writing a handoff file, commit/push it on the task branch when safe; an unpushed sandbox file will disappear after Vibe Code Web deprovisions the session.
-
-Use this compact record:
+W opisie/komentarzu PR albo w pliku na branchu konkretnego zadania umieść:
 
 ```markdown
 # Task handoff
-
-## Objective and acceptance criteria
-
-## Git and PR state
-- integration branch and base SHA:
-- task branch and HEAD SHA:
-- PR URL/status:
-- working tree:
-- pushed commits:
-- uncommitted files (NOT durable):
-
-## Verified completed work
-- files / behavior:
-
-## Tests and evidence
-- command, exact result and environment:
-- actual CI link and status (or pending/not run):
-
-## Current failure or blocker
-- reproduction / first wrong value:
-- observed vs hypothesized root cause:
-
-## Remaining work (ordered)
-1. ...
-
-## Files and invariants that matter
-- path: reason
-
-## Do not redo / out of scope
-- ...
+- Cel i kryteria odbioru:
+- Branch integracyjny / base SHA:
+- Task branch / HEAD SHA / PR URL:
+- Zatwierdzony zakres / poza zakresem:
+- Zmodyfikowane pliki i dowody:
+- Testy: komenda, wynik i środowisko:
+- CI: link, SHA i status lub niewykonane:
+- Aktualny blocker / pierwsza błędna wartość:
+- Następne ZATWIERDZONE działanie:
+- Zmiany tylko lokalne, jeszcze niewypchnięte:
 ```
 
-Only include verified facts as facts; mark uncertain findings as hypotheses. Never claim a push, test, fix, merge or persisted state without checking it.
-
-## New session
-
-Read root `AGENTS.md`, the canonical `PROJECT_STATUS.md` and branch policy; inspect Git/PR/CI; read the handoff and verify its critical claims. Resume the **first remaining approved action** instead of re-planning the project or selecting another issue. If the handoff conflicts with current repo state, report the discrepancy before editing.
+Jeżeli handoff jest w pliku, zapisz i wypchnij go na task branch, kiedy jest bezpieczny. Handoff niewysłany z sandboxa Vibe może zniknąć. Przy wznowieniu: odczytaj root `AGENTS.md`, kanon, `repository-handoff.md`, zweryfikuj stan Git/PR/CI, a potem kontynuuj pierwszą niewykonaną zatwierdzoną czynność.
