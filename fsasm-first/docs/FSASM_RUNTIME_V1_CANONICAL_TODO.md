@@ -384,19 +384,19 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Testy:** `tests/test_v1_task_retry_feedback.py`.
 
-- [ ] Negatywna Verification kończy próbę, zapisuje evidence/feedback i dopiero Domain Core decyduje o kolejnej `task_attempt`.
-- [ ] Context kolejnej próby zawiera konkretną poprzednią porażkę i aktualny artefakt.
-- [ ] Retry activity po błędzie transportu nie zwiększa `task_attempt`.
-- [ ] Wyczerpanie max attempts prowadzi do zatwierdzonej ścieżki eskalacji/gate, nie do nieskończonej pętli.
+- [x] Negatywna Verification kończy próbę, zapisuje evidence/feedback i dopiero Domain Core decyduje o kolejnej `task_attempt`.
+- [x] Context kolejnej próby zawiera konkretną poprzednią porażkę i aktualny artefakt.
+- [x] Retry activity po błędzie transportu nie zwiększa `task_attempt`.
+- [x] Wyczerpanie max attempts prowadzi do zatwierdzonej ścieżki eskalacji/gate, nie do nieskończonej pętli.
 
 **Odbiór:** scenariusz FAIL → attempt 2 → PASS używa poprzedniego feedbacku; błędy transportowe i tool calls nie zużywają prób merytorycznych.
 
 ### Gate E. Pełna pętla na kontrolowanym modelu
 
-- [ ] Context jest ograniczony i ma provenance.
-- [ ] Gateway normalizuje odpowiedzi i usage.
-- [ ] Executor wykonuje wiele kroków narzędziowych w jednej próbie.
-- [ ] Retry merytoryczne, techniczne i agent steps są oddzielne.
+- [x] Context jest ograniczony i ma provenance.
+- [x] Gateway normalizuje odpowiedzi i usage.
+- [x] Executor wykonuje wiele kroków narzędziowych w jednej próbie.
+- [x] Retry merytoryczne, techniczne i agent steps są oddzielne.
 
 ## Faza F. Adaptery modeli i deterministyczna eskalacja
 

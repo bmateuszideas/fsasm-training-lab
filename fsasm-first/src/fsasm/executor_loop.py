@@ -39,6 +39,7 @@ from fsasm.model_types import (
     FinalResponse,
     InvalidResponse,
     ModelCallBudget,
+    ModelError,
     ModelMessage,
     ModelMessageRole,
     ModelRequest,
@@ -171,6 +172,11 @@ class ExecutorAttemptOutcome:
     final_content: str = ""
     escalation: EscalationRequest | None = None
     backend: str = ""
+    # The transport error that terminated the attempt, if the terminal reason
+    # was a model transport failure (T18 retry classifier uses this to
+    # distinguish a transport retry - no task_attempt bump - from a
+    # merytoryczny FAIL). None for every other terminal path.
+    transport_error: ModelError | None = None
 
 
 @dataclass
@@ -330,6 +336,7 @@ class ExecutorLoop:
                     observations,
                     steps,
                     backend=backend_name,
+                    transport_error=result.error,
                 )
 
             response = result.response
@@ -663,6 +670,7 @@ class ExecutorLoop:
         final_content: str = "",
         escalation: EscalationRequest | None = None,
         backend: str = "",
+        transport_error: ModelError | None = None,
     ) -> ExecutorAttemptOutcome:
         return ExecutorAttemptOutcome(
             run_id=run_id,
@@ -675,6 +683,7 @@ class ExecutorLoop:
             final_content=final_content,
             escalation=escalation,
             backend=backend,
+            transport_error=transport_error,
         )
 
 
