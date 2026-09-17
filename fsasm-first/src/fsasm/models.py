@@ -373,8 +373,39 @@ class VerificationResult(BaseModel):
     )
 
 
+class TaskBudget(BaseModel):
+    """Configurable limits for a single Child Task attempt (T04).
+
+    Budgets are advisory caps enforced at the execution boundary; they are
+    part of the authoritative snapshot so a resumed run keeps the same limits.
+    ``None`` means the limit is not set (falls back to the run budget or the
+    runtime default). All counters are non-negative.
+    """
+
+    max_agent_steps: int | None = Field(
+        default=None, ge=1, description="Max model->tool iterations in one attempt."
+    )
+    max_model_calls: int | None = Field(
+        default=None, ge=1, description="Max model calls in one attempt."
+    )
+    max_tool_calls: int | None = Field(
+        default=None, ge=1, description="Max tool calls in one attempt."
+    )
+    max_attempts: int | None = Field(
+        default=None, ge=1, description="Max attempts for this task (overrides Plan)."
+    )
+
+
 class ChildTask(BaseModel):
-    """An atomic task in the FS-ASM plan."""
+    """An atomic task in the FS-ASM plan (v1 Task Register entry).
+
+    Parent/Child: a Parent task aggregates Child tasks; a Child carries its
+    ``parent_id``. The v1 plan is a flat list of tasks with dependencies; the
+    Parent/run result is computed from the required Child tasks by the
+    Scheduler, not stored as a second authority. Dynamic attempt state
+    (``attempt``, ``status``, ``accepted_evidence_refs``) lives on the task so
+    the single snapshot remains the only authority.
+    """
 
     task_id: str = Field(..., description="Unique identifier for this task.")
     parent_id: str | None = Field(
@@ -398,6 +429,10 @@ class ChildTask(BaseModel):
         default_factory=list,
         description="List of file patterns this task is allowed to modify.",
     )
+    allowed_tools: list[str] = Field(
+        default_factory=list,
+        description="List of tool kinds this task is allowed to invoke.",
+    )
     verification: VerificationSpec = Field(
         ..., description="How to verify this task's result."
     )
@@ -409,6 +444,19 @@ class ChildTask(BaseModel):
     )
     max_attempts: int = Field(
         default=3, ge=1, description="Maximum number of attempts allowed."
+    )
+    # v1: accepted evidence references for the CURRENT attempt only. PASS is
+    # granted solely when these refs are integral and the Verifier confirmed
+    # the current artifact; orphan evidence must not yield PASS.
+    accepted_evidence_refs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Evidence IDs accepted for the current attempt. Cleared/replaced on "
+            "a new attempt so stale evidence cannot authorize a later attempt."
+        ),
+    )
+    budget: TaskBudget | None = Field(
+        default=None, description="Per-task limits; None falls back to the run budget."
     )
 
     @field_validator("task_id")
@@ -440,7 +488,16 @@ class ChildTask(BaseModel):
 
 
 class Plan(BaseModel):
-    """The FS-ASM plan containing tasks to execute."""
+    """The FS-ASM plan containing tasks to execute (v1 Task Register).
+
+    The plan is the static configuration: task identity, dependencies,
+    acceptance criteria, verification spec, allowed scope and limits. Dynamic
+    per-attempt state (``attempt``, ``status``, ``accepted_evidence_refs``)
+    lives on each ``ChildTask`` so the single snapshot remains the only
+    authority; the plan is not a second writable register. A plan of 1, 3 or N
+    tasks is accepted (the historical "exactly 3" constraint of the milestone
+    demo does not apply to the v1 domain model).
+    """
 
     plan_id: str = Field(..., description="Unique identifier for this plan.")
     run_id: str = Field(..., description="The run ID this plan belongs to.")
@@ -450,8 +507,8 @@ class Plan(BaseModel):
     @field_validator("tasks")
     @classmethod
     def validate_tasks(cls, v: list[ChildTask]) -> list[ChildTask]:
-        if len(v) != 3:
-            raise ValueError("Plan must contain exactly 3 ChildTasks for milestone 1")
+        if len(v) < 1:
+            raise ValueError("Plan must contain at least 1 ChildTask")
         return v
 
     @model_validator(mode="after")
@@ -470,6 +527,30 @@ class Plan(BaseModel):
                     raise ValueError(
                         f"Task {task.task_id} depends on non-existent task {dep_id}"
                     )
+        return self
+
+    @model_validator(mode="after")
+    def validate_no_dependency_cycles(self) -> "Plan":
+        """Reject a dependency DAG that contains a cycle."""
+        adj: dict[str, list[str]] = {
+            t.task_id: list(t.dependencies) for t in self.tasks
+        }
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: dict[str, int] = {tid: WHITE for tid in adj}
+
+        def visit(node: str, path: tuple[str, ...]) -> None:
+            color[node] = GRAY
+            for nxt in adj.get(node, []):
+                if color[nxt] == GRAY:
+                    cycle = " -> ".join(path + (nxt,))
+                    raise ValueError(f"Dependency cycle detected: {cycle}")
+                if color[nxt] == WHITE:
+                    visit(nxt, path + (nxt,))
+            color[node] = BLACK
+
+        for tid in adj:
+            if color[tid] == WHITE:
+                visit(tid, (tid,))
         return self
 
 
@@ -573,13 +654,85 @@ class ExecutorOutput(BaseModel):
         )
 
 
+class RunBudget(BaseModel):
+    """Configurable limits for a whole run (T04).
+
+    Caps are enforced at the execution/escalation boundary and live in the
+    authoritative snapshot so a resumed run keeps them. ``None`` means the
+    limit is not set (runtime default applies). All counters are non-negative.
+    """
+
+    max_attempts_per_task: int | None = Field(
+        default=None, ge=1, description="Default max attempts for every task."
+    )
+    max_agent_steps: int | None = Field(
+        default=None,
+        ge=1,
+        description="Default max model->tool iterations per attempt.",
+    )
+    max_model_calls: int | None = Field(
+        default=None, ge=1, description="Default max model calls per attempt."
+    )
+    max_tool_calls: int | None = Field(
+        default=None, ge=1, description="Default max tool calls per attempt."
+    )
+    max_escalations: int | None = Field(
+        default=None, ge=0, description="Max consultation/handover escalations per run."
+    )
+
+
+class GateOccurrence(BaseModel):
+    """One Human Gate occurrence in the authoritative snapshot (T04).
+
+    The gate occurrence, its lifecycle and the accepted/applied decision are
+    part of the snapshot (not an ephemeral workflow-only consent). The granted
+    authority is bounded: a RETRY_ONCE authorizes exactly one additional
+    attempt for the task this gate belongs to.
+    """
+
+    gate_id: str = Field(..., description="Deterministic gate occurrence identifier.")
+    task_id: str = Field(..., description="The task this gate is open for.")
+    attempt: int = Field(
+        ..., ge=1, description="The attempt that reached this gate (1-indexed)."
+    )
+    accepted_decision_id: str | None = Field(
+        default=None, description="Decision id accepted for this gate, once applied."
+    )
+    accepted_action: HumanDecisionAction | None = Field(
+        default=None, description="The accepted human action for this gate."
+    )
+    applied: bool = Field(
+        default=False, description="Whether the accepted decision was durably applied."
+    )
+
+
 class RunState(BaseModel):
-    """The complete state of an FS-ASM run."""
+    """The complete authoritative state of an FS-ASM run (v1 snapshot).
+
+    One snapshot contains the plan (Task Register), per-attempt dynamic state,
+    run/parent status, counters, gate occurrence and accepted evidence refs.
+    ``revision`` is monotonic and incremented exactly once per accepted domain
+    event; ``commit_snapshot(run_id, expected_revision, next_state)`` rejects a
+    stale revision. The model validates structural invariants (no duplicate IDs,
+    no missing references, no dependency cycles, at most one active task,
+    consistent statuses) so an inconsistent snapshot is rejected before it can
+    be committed.
+    """
 
     run_id: str = Field(..., description="Unique identifier for this run.")
     goal: str = Field(..., min_length=1, description="The goal this run addresses.")
     status: RunStatus = Field(
         default=RunStatus.CREATED, description="Current status of the run."
+    )
+    schema_version: int = Field(
+        default=1,
+        ge=1,
+        description="Snapshot schema version for forward-compatible reads.",
+    )
+    revision: int = Field(
+        default=0,
+        ge=0,
+        description="Monotonic snapshot revision; one per accepted event.",
     )
     plan: Plan | None = Field(
         default=None, description="The plan for this run, if planning is complete."
@@ -588,10 +741,19 @@ class RunState(BaseModel):
         default=None, description="ID of the currently active task, if any."
     )
     completed_task_ids: list[str] = Field(
-        default_factory=list, description="List of completed task IDs."
+        default_factory=list, description="List of completed (PASSED) task IDs."
     )
     failed_task_ids: list[str] = Field(
-        default_factory=list, description="List of failed task IDs."
+        default_factory=list, description="List of permanently failed task IDs."
+    )
+    needs_human_task_ids: list[str] = Field(
+        default_factory=list, description="Tasks currently waiting at a Human Gate."
+    )
+    gate: GateOccurrence | None = Field(
+        default=None, description="The currently open Human Gate, if any."
+    )
+    budget: RunBudget | None = Field(
+        default=None, description="Run-wide limits; tasks may override per-task."
     )
     created_at: str = Field(
         default_factory=lambda: datetime.utcnow().isoformat() + "Z",
@@ -613,6 +775,64 @@ class RunState(BaseModel):
     def validate_plan_run_id_match(self) -> "RunState":
         if self.plan is not None and self.plan.run_id != self.run_id:
             raise ValueError("Plan run_id must match RunState run_id")
+        return self
+
+    @model_validator(mode="after")
+    def validate_register_invariants(self) -> "RunState":
+        """Enforce v1 snapshot invariants that are always destructive when
+        violated: unique IDs, no missing references, no dependency cycles (Plan
+        already checks cycles), and gate consistency *when* the new v1 gate/
+        needs_human fields are populated.
+
+        Intentionally lenient about transitional M4 states the demonstrator
+        still writes before T07 adapts the activities: e.g. ``active_task_id``
+        may briefly coincide with a terminal set during a FAILED->READY retry
+        transition, and a NEEDS_HUMAN run may be expressed via the task's
+        ``status`` rather than the new ``needs_human_task_ids`` field. These are
+        not structural corruption; the clean Domain Core (T05) and the activity
+        adapter (T07) tighten the contract once the single apply_event path is
+        the only mutation path.
+        """
+        if self.plan is None:
+            return self
+
+        task_ids = [t.task_id for t in self.plan.tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("Task IDs must be unique within the plan")
+        id_set = set(task_ids)
+
+        # The active task must reference a real register entry.
+        if self.active_task_id is not None and self.active_task_id not in id_set:
+            raise ValueError(f"active_task_id {self.active_task_id} not in plan")
+
+        # Terminal / needs_human sets must reference real tasks.
+        for label, ids in (
+            ("completed_task_ids", self.completed_task_ids),
+            ("failed_task_ids", self.failed_task_ids),
+            ("needs_human_task_ids", self.needs_human_task_ids),
+        ):
+            for tid in ids:
+                if tid not in id_set:
+                    raise ValueError(f"{label} references unknown task {tid}")
+
+        done = set(self.completed_task_ids)
+        failed = set(self.failed_task_ids)
+        needs_human = set(self.needs_human_task_ids)
+        if done & failed:
+            raise ValueError("a task cannot be both completed and failed")
+        if done & needs_human or failed & needs_human:
+            raise ValueError("a needs_human task cannot be in a terminal set")
+
+        # Gate consistency: when a v1 gate occurrence is recorded it must match
+        # the run status and the needs_human set. M4 runs that express the gate
+        # only via task.status do not set this field, so this check is skipped.
+        if self.gate is not None:
+            if self.status != RunStatus.NEEDS_HUMAN:
+                raise ValueError("gate set but run status is not NEEDS_HUMAN")
+            if self.gate.task_id not in needs_human:
+                raise ValueError(
+                    f"gate task {self.gate.task_id} not in needs_human_task_ids"
+                )
         return self
 
     def touch(self) -> "RunState":
@@ -673,3 +893,57 @@ class HumanDecision(BaseModel):
         if not v.strip():
             raise ValueError("task_id cannot be empty")
         return v.strip()
+
+
+# =============================================================================
+# V1 DOMAIN IDENTITY HELPERS (T04)
+# =============================================================================
+# Deterministic, collision-resistant identifiers for the v1 domain. They derive
+# only from stable domain inputs (run_id/task_id/attempt/...), never from random
+# values or wall-clock time, so the same logical event yields the same id. The
+# runtime owns id assignment; the LLM never proposes its own ids.
+
+
+def task_id_for(run_id: str, sequence: int) -> str:
+    """Runtime-owned Child Task id from run_id and sequence."""
+    return f"TASK-{run_id}-{sequence}"
+
+
+def parent_id_for(run_id: str) -> str:
+    """Runtime-owned Parent (plan-level) task id from run_id."""
+    return f"PARENT-{run_id}"
+
+
+def operation_id_for(run_id: str, task_id: str, attempt: int, step: int) -> str:
+    """One tool/model operation within a single attempt."""
+    return f"op-{run_id}-{task_id}-attempt-{attempt}-step-{step}"
+
+
+def artifact_id_for(run_id: str, task_id: str, attempt: int) -> str:
+    """One produced artifact for a specific attempt."""
+    return f"artifact-{run_id}-{task_id}-attempt-{attempt}"
+
+
+def evidence_id_for(run_id: str, task_id: str, attempt: int, kind: str) -> str:
+    """Evidence id binding a verification result to an attempt + kind."""
+    return f"evidence-{run_id}-{task_id}-attempt-{attempt}-{kind}"
+
+
+def gate_id_for(run_id: str, task_id: str, attempt: int) -> str:
+    """Deterministic Human Gate occurrence id (run_id/task_id/attempt).
+
+    Matches the workflow-level ``_gate_id`` so the snapshot and the signal
+    handler agree on gate identity without a second authority.
+    """
+    return f"gate-{run_id}-{task_id}-attempt-{attempt}"
+
+
+def decision_id_for(
+    run_id: str, task_id: str, gate_id: str, action: HumanDecisionAction
+) -> str:
+    """Deterministic logical decision id (run_id/task_id/gate_id/action).
+
+    Matches the workflow-level ``_decision_id`` so transport-level retry of the
+    same decision is idempotent and a contradictory reuse is rejected.
+    """
+    return f"decision-{run_id}-{task_id}-{gate_id}-{action.value}"
