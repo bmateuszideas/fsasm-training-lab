@@ -31,13 +31,36 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fsasm.models import ToolObservation, ToolOperationKind, operation_id_for
+from fsasm.models import (
+    CheckKind,
+    ToolObservation,
+    ToolOperationKind,
+    operation_id_for,
+)
 
 # Default caps; the broker accepts overrides at construction (T11 keeps them
 # conservative; T29 will configure the laptop profile).
 DEFAULT_MAX_READ_BYTES = 256 * 1024
 DEFAULT_MAX_WRITE_BYTES = 256 * 1024
 DEFAULT_MAX_LIST_ENTRIES = 1000
+
+# T12 process isolation defaults.
+DEFAULT_CHECK_TIMEOUT_SECONDS = 120
+DEFAULT_CHECK_MAX_OUTPUT_BYTES = 256 * 1024
+# Environment variables inherited by a check process (allowlist only); anything
+# else (notably secrets) is dropped. HOME and PATH keep tools usable.
+DEFAULT_CHECK_ENV_ALLOWLIST = ("PATH", "PYTHONPATH", "HOME", "LANG", "LC_ALL")
+# Fixed, trusted argv prefixes per allowlisted CheckKind. The model never
+# supplies an executable name: PYTEST/PYTEST_FILE/RUFF_CHECK use the project
+# tool entrypoint, and CUSTOM is validated to a bare name (see run_checks).
+_CHECK_ARGV: dict[CheckKind, tuple[str, ...]] = {
+    CheckKind.PYTEST: ("uv", "run", "python", "-m", "pytest"),
+    CheckKind.PYTEST_FILE: ("uv", "run", "python", "-m", "pytest"),
+    CheckKind.RUFF_CHECK: ("uv", "run", "python", "-m", "ruff", "check"),
+}
+# Bare executables permitted for a CUSTOM check; mapped to a real path through
+# PATH. This stays a small, auditable allowlist rather than a free shell.
+_CUSTOM_EXE_ALLOWLIST = frozenset({"python", "ruff", "pytest"})
 
 
 class PolicyBlockError(Exception):
@@ -65,6 +88,10 @@ class ToolBroker:
     max_read_bytes: int = DEFAULT_MAX_READ_BYTES
     max_write_bytes: int = DEFAULT_MAX_WRITE_BYTES
     max_list_entries: int = DEFAULT_MAX_LIST_ENTRIES
+    # T12 process-isolation caps; overridable per broker, never per call.
+    check_timeout_seconds: float = DEFAULT_CHECK_TIMEOUT_SECONDS
+    check_max_output_bytes: int = DEFAULT_CHECK_MAX_OUTPUT_BYTES
+    check_env_allowlist: tuple[str, ...] = DEFAULT_CHECK_ENV_ALLOWLIST
 
     def __post_init__(self) -> None:
         self.workspace_root = Path(self.workspace_root).resolve()
@@ -277,6 +304,130 @@ class ToolBroker:
             content=content,
         )
 
+    def run_checks(
+        self,
+        run_id: str,
+        task_id: str,
+        attempt: int,
+        step: int,
+        kind: CheckKind,
+        args: list[str] | None = None,
+    ) -> ToolObservation:
+        """Run an allowlisted check in the workspace, isolated from the model.
+
+        The check kind maps to a fixed, trusted argv prefix; the model only
+        supplies trailing arguments, which are validated to be free of shell
+        metacharacters, path separators and NUL bytes. The process runs with
+        ``shell=False`` (an argv list), ``cwd`` pinned to the workspace root,
+        a timeout, an output cap with a truncation marker, and an env
+        allowlist so secrets never reach the child. The observation records
+        the exit code, stdout/stderr, duration and identity; it never grants
+        PASS (architecture §27, §28, §29; canonical TODO T12).
+        """
+        import subprocess
+        import time
+
+        op = self._op_id(run_id, task_id, attempt, step)
+        if not self.workspace_root.is_dir():
+            return self._blocked(
+                op, ToolOperationKind.RUN_CHECKS, "workspace root missing"
+            )
+        # Validate the kind once more (defence in depth; callers pass a
+        # CheckKind but a deserialized value could be a raw string).
+        if not isinstance(kind, CheckKind):
+            return self._blocked(
+                op,
+                ToolOperationKind.RUN_CHECKS,
+                f"unknown check kind: {kind!r}",
+            )
+        validated = self._validate_check_args(kind, args or [])
+        if validated.error is not None:
+            return self._blocked(
+                op, ToolOperationKind.RUN_CHECKS, validated.error, check_kind=kind
+            )
+        assert validated.argv is not None  # err is None => argv built
+        argv = validated.argv
+        # Environment: start empty and copy only allowlisted vars from this
+        # process, so a secret present in the parent env never leaks to the
+        # check child.
+        child_env = {
+            name: os.environ[name]
+            for name in self.check_env_allowlist
+            if name in os.environ
+        }
+        start = time.monotonic()
+        try:
+            proc = subprocess.run(  # noqa: S603 -- argv is a trusted list
+                argv,
+                cwd=self.workspace_root,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=self.check_timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            stdout, stdout_trunc = _truncate(
+                (exc.stdout or "") if isinstance(exc.stdout, str) else "",
+                self.check_max_output_bytes,
+            )
+            stderr, stderr_trunc = _truncate(
+                (exc.stderr or "") if isinstance(exc.stderr, str) else "",
+                self.check_max_output_bytes,
+            )
+            return ToolObservation(
+                operation_id=op,
+                kind=ToolOperationKind.RUN_CHECKS,
+                ok=False,
+                blocked=False,
+                reason=f"check timed out after {self.check_timeout_seconds}s",
+                check_kind=kind,
+                exit_code=None,
+                stdout=stdout,
+                stderr=stderr,
+                duration_ms=duration_ms,
+                truncated=stdout_trunc or stderr_trunc,
+                timed_out=True,
+            )
+        except FileNotFoundError:
+            return ToolObservation(
+                operation_id=op,
+                kind=ToolOperationKind.RUN_CHECKS,
+                ok=False,
+                blocked=False,
+                reason=f"check executable not found: {argv[0]}",
+                check_kind=kind,
+                exit_code=None,
+            )
+        except OSError as exc:
+            return ToolObservation(
+                operation_id=op,
+                kind=ToolOperationKind.RUN_CHECKS,
+                ok=False,
+                blocked=False,
+                reason=f"process error: {exc}",
+                check_kind=kind,
+                exit_code=None,
+            )
+        duration_ms = int((time.monotonic() - start) * 1000)
+        stdout, stdout_trunc = _truncate(proc.stdout, self.check_max_output_bytes)
+        stderr, stderr_trunc = _truncate(proc.stderr, self.check_max_output_bytes)
+        return ToolObservation(
+            operation_id=op,
+            kind=ToolOperationKind.RUN_CHECKS,
+            ok=True,
+            blocked=False,
+            reason="",
+            exit_code=proc.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            duration_ms=duration_ms,
+            truncated=stdout_trunc or stderr_trunc,
+            timed_out=False,
+            check_kind=kind,
+        )
+
     # -- scope enforcement ------------------------------------------------
 
     def _resolve_within_scope(
@@ -349,6 +500,7 @@ class ToolBroker:
         kind: ToolOperationKind,
         reason: str,
         artifact_path: str | None = None,
+        check_kind: CheckKind | None = None,
     ) -> ToolObservation:
         return ToolObservation(
             operation_id=op,
@@ -357,7 +509,81 @@ class ToolBroker:
             blocked=True,
             reason=reason,
             artifact_path=artifact_path,
+            check_kind=check_kind,
         )
+
+    def _validate_check_args(
+        self,
+        kind: CheckKind,
+        args: list[str],
+    ) -> "_ValidatedCheck":
+        """Build a trusted argv list for ``kind`` from model-supplied ``args``.
+
+        Fixed kinds (PYTEST/PYTEST_FILE/RUFF_CHECK) use a fixed trusted prefix
+        and append validated trailing args. PYTEST_FILE requires exactly one
+        argument bound to a path inside the workspace (a test file path).
+        CUSTOM requires a bare allowlisted executable name as its first arg,
+        then validated trailing args. Every trailing argument is rejected if
+        it contains a NUL byte, a path separator, a shell metacharacter, a
+        redirect character, or any whitespace-padded/suspicious token. No shell
+        string is ever composed.
+        """
+        prefix = _CHECK_ARGV.get(kind)
+        if prefix is not None:
+            argv = list(prefix)
+            if kind is CheckKind.PYTEST_FILE:
+                # PYTEST_FILE takes exactly one workspace-contained test path,
+                # validated as a path (it legitimately contains "/"); the path
+                # is checked before the trailing-arg forbidden-char pass.
+                if len(args) != 1:
+                    return _ValidatedCheck(
+                        None, "pytest_file requires exactly one test path argument"
+                    )
+                file_err = self._validate_check_path(args[0])
+                if file_err is not None:
+                    return _ValidatedCheck(None, file_err)
+                argv.append(args[0])
+                return _ValidatedCheck(argv, None)
+            for err in _validate_trailing_args(args):
+                return _ValidatedCheck(None, err)
+            argv.extend(args)
+            return _ValidatedCheck(argv, None)
+        if kind is CheckKind.CUSTOM:
+            if not args:
+                return _ValidatedCheck(None, "custom check requires an executable")
+            exe = args[0]
+            if not _is_bare_name(exe) or exe not in _CUSTOM_EXE_ALLOWLIST:
+                return _ValidatedCheck(
+                    None, f"custom executable not allowlisted: {exe!r}"
+                )
+            for err in _validate_trailing_args(args[1:]):
+                return _ValidatedCheck(None, err)
+            return _ValidatedCheck(list(args), None)
+        return _ValidatedCheck(None, f"unknown check kind: {kind!r}")
+
+    def _validate_check_path(self, rel: str) -> str | None:
+        """Validate that ``rel`` is a workspace-contained path for a check arg.
+
+        Returns an error string when the path escapes the root, is absolute,
+        traverses outside, or escapes via symlink. A non-existent but
+        contained path is allowed (the check will report its own failure).
+        """
+        if not rel or rel.strip() != rel:
+            return "empty or padded check path"
+        candidate = Path(rel)
+        if candidate.is_absolute():
+            return "absolute check paths are not allowed"
+        rel_parts = _normalize_relative_parts(candidate)
+        if rel_parts is None:
+            return "check path traversal outside workspace"
+        norm = self.workspace_root.joinpath(*rel_parts)
+        if not _is_within(norm, self.workspace_root):
+            return "check path escapes workspace root"
+        if norm.exists() or norm.is_symlink():
+            real = norm.resolve(strict=False)
+            if not _is_within(real, self.workspace_root):
+                return "check path symlink escapes workspace root"
+        return None
 
 
 def _is_within(child: Path, parent: Path) -> bool:
@@ -408,6 +634,102 @@ def _unified_diff(rel: str, before: str, after: str) -> str:
 
 def _strip_eol(line: str) -> str:
     return line[:-1] if line.endswith("\n") else line
+
+
+# -- T12 process isolation helpers --------------------------------------
+# Characters that must never appear in a check argument: path separators,
+# shell metacharacters, redirects, command separators, wildcards, quotes,
+# backticks and newlines. A NUL byte is rejected separately so the message is
+# explicit. Denying the whole set keeps the argv list literal — no shell ever
+# interprets these tokens because no shell is invoked.
+_FORBIDDEN_ARG_CHARS = frozenset(
+    {
+        "/",
+        "\\",
+        ";",
+        "|",
+        "&",
+        "<",
+        ">",
+        "`",
+        "$",
+        "*",
+        "?",
+        "[",
+        "]",
+        "{",
+        "}",
+        "'",
+        '"',
+        "\n",
+        "\r",
+        "\t",
+    }
+)
+# NUL is checked with an explicit message.
+_NUL = "\x00"
+
+
+@dataclass
+class _ValidatedCheck:
+    """Result of building a trusted argv list for a check."""
+
+    argv: list[str] | None
+    error: str | None
+
+
+def _validate_trailing_args(args: list[str]) -> list[str]:
+    """Yield error strings for any trailing check argument that is unsafe.
+
+    An argument must be a non-empty, unquoted, single-line token with no path
+    separator, shell metacharacter, redirect, wildcard or NUL byte. A rejected
+    argument is reported once; the caller stops on the first error.
+    """
+    errors: list[str] = []
+    for arg in args:
+        if not isinstance(arg, str) or arg == "":
+            errors.append("empty check argument")
+            break
+        if _NUL in arg:
+            errors.append("NUL byte in check argument")
+            break
+        if arg != arg.strip():
+            errors.append("padded check argument")
+            break
+        bad = next((c for c in _FORBIDDEN_ARG_CHARS if c in arg), None)
+        if bad is not None:
+            errors.append(f"forbidden character {bad!r} in check argument")
+            break
+    return errors
+
+
+def _is_bare_name(name: str) -> bool:
+    """True when ``name`` is a single path-component (no separator/dot-rel)."""
+    if not name or name != name.strip():
+        return False
+    if name in (".", ".."):
+        return False
+    return "/" not in name and "\\" not in name
+
+
+def _truncate(text: str, limit: int) -> tuple[str, bool]:
+    """Truncate ``text`` to ``limit`` bytes with a marker if it exceeds it.
+
+    Truncation works on encoded bytes then decodes safely so a multi-byte
+    sequence is never split. Returns ``(truncated_text, was_truncated)``.
+    """
+    if not text:
+        return "", False
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text, False
+    marker = "\n...[truncated]"
+    marker_bytes = marker.encode("utf-8")
+    keep = max(0, limit - len(marker_bytes))
+    # Decode with errors="ignore" so an incomplete trailing byte sequence is
+    # dropped rather than raising.
+    head = encoded[:keep].decode("utf-8", errors="ignore")
+    return head + marker, True
 
 
 __all__ = [

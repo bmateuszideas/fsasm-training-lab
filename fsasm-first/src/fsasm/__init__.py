@@ -1,6 +1,7 @@
 """FS-ASM: File System as State Machine - Core domain package."""
 
 from fsasm.models import (
+    CheckKind,
     ChildTask,
     EvidenceRecord,
     GoalInput,
@@ -38,6 +39,7 @@ __all__ = [
     "EvidenceRecord",
     "ToolObservation",
     "ToolOperationKind",
+    "CheckKind",
     "RunState",
     "RunStatus",
     "TaskStatus",
