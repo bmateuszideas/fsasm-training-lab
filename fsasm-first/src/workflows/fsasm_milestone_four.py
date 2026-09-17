@@ -1101,7 +1101,7 @@ async def persist_final_m4_state_activity(
 async def persist_human_gate_rejections_activity(
     run_id: str,
     task_id: str,
-    gate_id: str,
+    gate_id: str | None,
     rejected_signals: list[dict[str, Any]],
 ) -> None:
     """Persist auditable records of rejected Human Gate signals.
@@ -1304,11 +1304,19 @@ class FsasmMilestoneFourWorkflow:
         """
         if self.flushed_rejections >= len(self.pending_rejections):
             return
+        # Snapshot the END of the slice being processed BEFORE any await. A
+        # signal may append a new rejection during an await below; that record
+        # is OUTSIDE this snapshot and must remain for the next drain. The
+        # cursor advances only over the processed slice, never over records
+        # appended during the awaits (G5).
+        processed_end = len(self.pending_rejections)
         # Group unflushed records by their recorded gate tag (the gate the
-        # signal was evaluated against), preserving insertion order.
+        # signal was evaluated against), preserving insertion order. A
+        # ``no_open_gate`` rejection has gate tag None; it is flushed with
+        # gate_id None (its own tag), never under the currently open gate (G4).
         groups: dict[str | None, list[dict[str, Any]]] = {}
         order: list[str | None] = []
-        for r in self.pending_rejections[self.flushed_rejections :]:
+        for r in self.pending_rejections[self.flushed_rejections : processed_end]:
             rid = r.get("rejection_id")
             if rid is not None and rid in self.flushed_rejection_ids:
                 continue
@@ -1319,14 +1327,15 @@ class FsasmMilestoneFourWorkflow:
             groups[tag].append(r)
         for tag in order:
             batch = groups[tag]
-            await persist_human_gate_rejections_activity(
-                run_id, task_id, tag if tag is not None else gate_id, batch
-            )
+            await persist_human_gate_rejections_activity(run_id, task_id, tag, batch)
             for r in batch:
                 rid = r.get("rejection_id")
                 if rid is not None:
                     self.flushed_rejection_ids.add(rid)
-        self.flushed_rejections = len(self.pending_rejections)
+        # Advance the cursor only over the slice processed in this call. Any
+        # rejection appended during the awaits stays at index >= processed_end
+        # and is flushed on a subsequent drain.
+        self.flushed_rejections = processed_end
 
     @workflows.workflow.signal(
         name="human_decision",

@@ -13,21 +13,24 @@ the precise mechanisms:
   `accepted_decisions` under the *current* gate. After that gate closes and a
   new gate opens, the same unmarked payload is accepted *again* as a new
   decision for the new gate (re-authorization), because nothing binds the first
-  consent to the first gate occurrence.
+  consent to the first gate occurrence. **Still PRESENT** as of T02 (G3 is the
+  scope of T03, which additionally requires a user decision on legacy payload
+  policy). The G3 reproducer below asserts PRESENT.
 
-- G4: `_flush_pending_rejections` passes `tag if tag is not None else gate_id`
-  to `persist_human_gate_rejections_activity`. A `no_open_gate` rejection has
-  `gate_id=None` (tag None), so the durable envelope's `gate_id` field receives
-  the *currently open* external gate id, contradicting the docstring claim that
-  it is "flushed with gate_id None".
+- G4: `_flush_pending_rejections` previously passed
+  `tag if tag is not None else gate_id` to
+  `persist_human_gate_rejections_activity`, so a `no_open_gate` rejection
+  (gate_id None) was flushed under the currently open gate id in the durable
+  envelope. **Fixed by T02** — the record's own tag (None) is now passed and the
+  envelope carries None. The G4 reproducer below asserts the FIXED contract
+  (ABSENT) and is a regression guard.
 
-- G5: `_flush_pending_rejections` snapshots the batch from the current cursor
-  slice, then performs an `await`. After the await it sets
-  `self.flushed_rejections = len(self.pending_rejections)` (the *current* total
-  length). A rejection appended during the await is neither in the snapshot
-  batch nor persisted, yet the cursor jumps past it, so a subsequent flush sees
-  `flushed_rejections >= len(...)` and returns early — the late rejection is
-  skipped.
+- G5: `_flush_pending_rejections` previously set
+  `self.flushed_rejections = len(self.pending_rejections)` after the awaits, so a
+  rejection appended during an await was skipped by the cursor jump. **Fixed by
+  T02** — the cursor now advances only over the slice snapshot before the
+  awaits, leaving late records for the next drain. The G5 reproducer below
+  asserts the FIXED contract (ABSENT) and is a regression guard.
 
 These tests drive the workflow component and the persist activity directly with
 controlled barriers (no Temporal worker), matching the audit's §11.2 procedure.
@@ -149,11 +152,10 @@ class TestG3LegacyConsentReassignedAcrossGates:
 
 
 class TestG4NoOpenGateRejectionMisattributedEnvelope:
-    """Reproduce the audit G4: a `no_open_gate` rejection has its own
-    `gate_id=None`, but `_flush_pending_rejections` substitutes the external
-    currently-open `gate_id` into the durable envelope when the record's tag is
-    None. The audit checks the persisted envelope, not the in-memory record
-    (which the existing tests already verify is None)."""
+    """G4 regression guard (fixed by T02): a `no_open_gate` rejection has its own
+    `gate_id=None`. `_flush_pending_rejections` must pass the record's own tag
+    (None) to the persist activity so the durable envelope's `gate_id` is None,
+    not the currently open gate id. PRESENT means the misattribution returned."""
 
     @pytest.mark.asyncio
     async def test_g4_persisted_envelope_carries_open_gate_not_none(self):
@@ -190,9 +192,11 @@ class TestG4NoOpenGateRejectionMisattributedEnvelope:
         envelope = entries[0]
         envelope_gate_id = envelope.get("gate_id")
 
-        # G4 is PRESENT iff the persisted envelope gate_id is the open gate (not None).
-        g4_present = envelope_gate_id == gate1
-        result = "PRESENT" if g4_present else "ABSENT"
+        # G4 (fixed by T02): the persisted envelope gate_id MUST be None (the
+        # rejection's own tag), never the currently open gate id. PRESENT would
+        # mean the misattribution regression returned.
+        g4_absent = envelope_gate_id is None
+        result = "ABSENT" if g4_absent else "PRESENT"
         detail = {
             "open_gate_id": gate1,
             "inner_record_gate_id": no_open[0]["gate_id"],
@@ -200,9 +204,9 @@ class TestG4NoOpenGateRejectionMisattributedEnvelope:
             "envelope_rejections_count": len(envelope.get("rejections", [])),
         }
         print(f"\n[G4] result={result} detail={detail}")
-        assert g4_present, (
-            "G4 ABSENT on this HEAD: the persisted envelope gate_id is None "
-            "(not the open gate), so G4 has been fixed; record ABSENT."
+        assert g4_absent, (
+            "G4 PRESENT on this HEAD: a no_open_gate rejection was flushed "
+            "under the open gate id in the durable envelope instead of None."
         )
 
 
@@ -212,10 +216,11 @@ class TestG4NoOpenGateRejectionMisattributedEnvelope:
 
 
 class TestG5LateRejectionSkippedByCursorDuringAwait:
-    """Reproduce the audit G5: during the `await` inside
-    `_flush_pending_rejections`, a second rejection is appended. The flush
-    persists only the first batch but then sets the cursor to the *current*
-    total length, so the late rejection is skipped on the next flush call.
+    """G5 regression guard (fixed by T02): during the `await` inside
+    `_flush_pending_rejections`, a second rejection is appended. The cursor must
+    advance only over the slice snapshot before the awaits, so the late
+    rejection is persisted on a subsequent flush. PRESENT means the cursor-skip
+    returned.
 
     A controlled barrier is placed in `persist_human_gate_rejections_activity`
     (the awaited write) so the second append happens deterministically before
@@ -283,11 +288,14 @@ class TestG5LateRejectionSkippedByCursorDuringAwait:
 
         in_memory_ids = [r.get("rejection_id") for r in wf.pending_rejections]
         late_appended = in_memory_ids[1] if len(in_memory_ids) > 1 else None
-        g5_present = (
-            late_appended is not None and late_appended not in persisted_rejection_ids
+        # G5 (fixed by T02): the late rejection appended during the persist
+        # await MUST be persisted on a subsequent flush. PRESENT would mean the
+        # cursor-skip regression returned.
+        g5_absent = (
+            late_appended is not None and late_appended in persisted_rejection_ids
         )
 
-        result = "PRESENT" if g5_present else "ABSENT"
+        result = "ABSENT" if g5_absent else "PRESENT"
         detail = {
             "in_memory_rejection_ids": in_memory_ids,
             "persisted_rejection_ids": persisted_rejection_ids,
@@ -299,7 +307,7 @@ class TestG5LateRejectionSkippedByCursorDuringAwait:
             "num_log_entries": len(entries),
         }
         print(f"\n[G5] result={result} detail={detail}")
-        assert g5_present, (
-            "G5 ABSENT on this HEAD: the late rejection was persisted on the "
-            "second flush, so the cursor no longer skips it; record ABSENT."
+        assert g5_absent, (
+            "G5 PRESENT on this HEAD: a rejection appended during the flush "
+            "await was skipped by the cursor and never persisted."
         )
