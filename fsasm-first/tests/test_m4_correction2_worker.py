@@ -143,6 +143,7 @@ class TestW10EarlySignalControlledBarrier:
         self, temporal_env, monkeypatch
     ):
         fired = {"barrier": False}
+        barrier_proof = {"gate_registered": None, "needs_human_persisted": None}
         handle_ref = {"h": None}
         loop = asyncio.get_running_loop()
 
@@ -156,6 +157,24 @@ class TestW10EarlySignalControlledBarrier:
                 and handle_ref["h"] is not None
             ):
                 fired["barrier"] = True
+                # Genuine synchronization barrier: at this point the
+                # authoritative NEEDS_HUMAN state is durably committed (the
+                # original commit just returned) and the workflow code has
+                # ALREADY registered the open gate (current_gate /
+                # current_gate_id are set BEFORE the activity is invoked).
+                # Capture deterministic proof of the intended interval, then
+                # schedule the signal from inside the activity (worker thread)
+                # via run_coroutine_threadsafe. Delivery confirmation is
+                # obtained deadlock-free: we do NOT block the worker thread on
+                # the client loop (which would deadlock against the in-memory
+                # test server). Instead we schedule the signal and verify
+                # post-completion that the workflow registered the gate before
+                # the signal was processed (it could only have been consumed by
+                # an open gate).
+                barrier_proof["needs_human_persisted"] = (
+                    RuntimePersistence().load_run_state("run-w10").status
+                    == RunStatus.NEEDS_HUMAN
+                )
                 asyncio.run_coroutine_threadsafe(
                     handle_ref["h"].signal(
                         FsasmMilestoneFourWorkflow.receive_human_decision,
@@ -178,8 +197,21 @@ class TestW10EarlySignalControlledBarrier:
             handle_ref["h"] = handle
             result = await asyncio.wait_for(handle.result(), timeout=30)
         assert fired["barrier"] is True
+        assert barrier_proof["needs_human_persisted"] is True, (
+            "The barrier must fire after NEEDS_HUMAN was durably committed."
+        )
         assert result["success"] is True
         assert result["human_decision"]["action"] == "RETRY_ONCE"
+        # Delivery + ordering confirmation: the early signal was consumed by
+        # the open gate (the workflow registered the gate before the activity
+        # persisted NEEDS_HUMAN, so the signal found an open gate and was
+        # preserved). The RETRY_ONCE was applied exactly once.
+        p = RuntimePersistence()
+        audits = [
+            e for e in p.load_all_evidence("run-w10") if e.kind == "human_gate_audit"
+        ]
+        assert len(audits) == 1
+        assert audits[0].payload["action"] == "RETRY_ONCE"
 
 
 # =====================================================================
@@ -217,8 +249,18 @@ class TestW11PersistenceFailureBeforeGateOpening:
         assert attempts["n"] >= 1
         p = RuntimePersistence()
         state = p.load_run_state("run-w11")
-        if state is not None:
-            assert state.status != RunStatus.NEEDS_HUMAN or True
+        # No unauthorized execution: NEEDS_HUMAN was never durably committed, so
+        # the run must NOT be in NEEDS_HUMAN (the commit failed) and no
+        # execution evidence may exist.
+        assert state is None or state.status != RunStatus.NEEDS_HUMAN, (
+            "The NEEDS_HUMAN commit failed, so the authoritative state must "
+            "not durably show NEEDS_HUMAN."
+        )
+        assert "TASK-001" not in [
+            e.task_id
+            for e in p.load_all_evidence("run-w11")
+            if e.kind == "executor_output"
+        ], "No executor evidence may exist when NEEDS_HUMAN persistence failed."
 
 
 # =====================================================================

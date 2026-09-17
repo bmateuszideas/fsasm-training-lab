@@ -1241,6 +1241,12 @@ class FsasmMilestoneFourWorkflow:
         self.applied_decision_ids: set[str] = set()
         self.pending_rejections: list[dict[str, Any]] = []
         self.flushed_rejections: int = 0
+        # D3: rejection_ids already durably flushed, so a replayed/retried
+        # flush does not duplicate logical audit records. Exactly-once is NOT
+        # claimed across crashes (no durable dedup store); within a workflow
+        # execution this prevents duplicate logical records from repeated
+        # flushes of the same in-memory rejection.
+        self.flushed_rejection_ids: set[str] = set()
         # T04: the exact identity of the currently open gate. The signal
         # handler compares incoming run_id/task_id/gate_id with EQUALITY
         # against this structure, never by substring matching against the
@@ -1248,6 +1254,79 @@ class FsasmMilestoneFourWorkflow:
         self.current_gate: OpenGate | None = None
         # The current gate_id being waited on (set before wait_condition).
         self.current_gate_id: str | None = None
+
+    def _append_rejection(self, record: dict[str, Any]) -> None:
+        """Append a rejection record with a stable deterministic rejection_id.
+
+        The rejection_id is a deterministic string key over the meaningful
+        rejection payload (gate tag, reason, task/run/action/decision identity,
+        accepted/rejected action and reason) so a replayed delivery of the
+        same rejected signal does not create two distinct in-memory records
+        (idempotent buffering). It is stamped onto the record for idempotent
+        persistence (D3). No cryptographic hashing is used inside the
+        deterministic workflow (the SDK forbids CPU-intensive crypto in
+        workflow code); this key is for in-execution dedup only and is NOT a
+        durable cross-crash dedup store (exactly-once across crashes is not
+        claimed).
+        """
+        rid = record.get("rejection_id")
+        if rid is None:
+            rid = "rej|" + "|".join(
+                str(record.get(k, ""))
+                for k in (
+                    "gate_id",
+                    "reason",
+                    "task_id",
+                    "run_id",
+                    "action",
+                    "decision_id",
+                    "accepted_action",
+                    "rejected_action",
+                    "accepted_reason",
+                    "rejected_reason",
+                )
+            )
+            record["rejection_id"] = rid
+        if not any(r.get("rejection_id") == rid for r in self.pending_rejections):
+            self.pending_rejections.append(record)
+
+    async def _flush_pending_rejections(
+        self, run_id: str, task_id: str, gate_id: str
+    ) -> None:
+        """Durably flush all unflushed pending rejections for the current
+        cursor position, grouped by each rejection's OWN recorded gate tag so a
+        rejection is never misattributed to a different gate occurrence (D1/D6).
+        A ``no_open_gate`` rejection (gate tag None) is flushed with gate_id
+        None, never under the currently open gate. Rejections already flushed
+        (by rejection_id) are skipped so a retried flush does not duplicate
+        logical audit records (D3). Advances the cursor over all processed
+        (skipped or persisted) records.
+        """
+        if self.flushed_rejections >= len(self.pending_rejections):
+            return
+        # Group unflushed records by their recorded gate tag (the gate the
+        # signal was evaluated against), preserving insertion order.
+        groups: dict[str | None, list[dict[str, Any]]] = {}
+        order: list[str | None] = []
+        for r in self.pending_rejections[self.flushed_rejections :]:
+            rid = r.get("rejection_id")
+            if rid is not None and rid in self.flushed_rejection_ids:
+                continue
+            tag = r.get("gate_id")
+            if tag not in groups:
+                groups[tag] = []
+                order.append(tag)
+            groups[tag].append(r)
+        for tag in order:
+            batch = groups[tag]
+            await persist_human_gate_rejections_activity(
+                run_id, task_id, tag if tag is not None else gate_id, batch
+            )
+            for r in batch:
+                rid = r.get("rejection_id")
+                if rid is not None:
+                    self.flushed_rejection_ids.add(rid)
+        self.flushed_rejections = len(self.pending_rejections)
 
     @workflows.workflow.signal(
         name="human_decision",
@@ -1299,7 +1378,7 @@ class FsasmMilestoneFourWorkflow:
         # last gate is explicitly rejected, never silently buffered for a
         # future gate.
         if self.current_gate is None:
-            self.pending_rejections.append(
+            self._append_rejection(
                 {
                     "reason": "no_open_gate",
                     "gate_id": gate_tag,
@@ -1313,7 +1392,7 @@ class FsasmMilestoneFourWorkflow:
 
         # BLOCKER 1: an explicit gate_id must match the currently open gate.
         if gate_id is not None and gate_id != cg.gate_id:
-            self.pending_rejections.append(
+            self._append_rejection(
                 {
                     "reason": "wrong_gate",
                     "gate_id": gate_id,
@@ -1327,7 +1406,7 @@ class FsasmMilestoneFourWorkflow:
         # BLOCKER A: exact task_id comparison BEFORE accepting. A wrong-task
         # signal must not occupy the first-wins slot.
         if decision.task_id != cg.task_id:
-            self.pending_rejections.append(
+            self._append_rejection(
                 {
                     "reason": "wrong_task",
                     "gate_id": cg.gate_id,
@@ -1341,7 +1420,7 @@ class FsasmMilestoneFourWorkflow:
         # BLOCKER B: exact run_id comparison (equality, not substring). A
         # wrong-run signal must not occupy the first-wins slot.
         if signal_data.run_id is not None and signal_data.run_id != cg.run_id:
-            self.pending_rejections.append(
+            self._append_rejection(
                 {
                     "reason": "wrong_run",
                     "gate_id": cg.gate_id,
@@ -1371,7 +1450,7 @@ class FsasmMilestoneFourWorkflow:
                 or existing_for_id.gate_id != effective_gate_id
                 or existing_for_id.reason != decision.reason
             ):
-                self.pending_rejections.append(
+                self._append_rejection(
                     {
                         "reason": "contradictory_decision_id_reuse",
                         "decision_id": decision_id,
@@ -1385,20 +1464,29 @@ class FsasmMilestoneFourWorkflow:
             return
 
         # First accepted VALID decision wins for the open gate. If a decision
-        # is already accepted for this gate, a conflicting signal is rejected
-        # without overwriting it.
+        # is already accepted for this gate, a signal is an identical duplicate
+        # ONLY when its complete meaningful payload (task_id, action, gate_id,
+        # reason) matches. A signal with the same action but a different reason
+        # is a contradictory submission and is recorded as rejected, NOT a
+        # silent no-op. Two legacy signals (decision_id=None) with the same
+        # action but different reason are therefore contradictory.
         if effective_gate_id in self.accepted_decisions:
             existing = self.accepted_decisions[effective_gate_id]
-            if (
-                existing.decision_id != decision_id
-                or existing.action != decision.action
-            ):
-                self.pending_rejections.append(
+            is_identical_duplicate = (
+                existing.task_id == decision.task_id
+                and existing.action == decision.action
+                and existing.gate_id == effective_gate_id
+                and existing.reason == decision.reason
+            )
+            if not is_identical_duplicate:
+                self._append_rejection(
                     {
                         "reason": "conflicting_signal_rejected_first_wins",
                         "gate_id": effective_gate_id,
                         "accepted_action": existing.action.value,
                         "rejected_action": decision.action.value,
+                        "accepted_reason": existing.reason,
+                        "rejected_reason": decision.reason,
                     }
                 )
                 return
@@ -1584,15 +1672,12 @@ class FsasmMilestoneFourWorkflow:
                         # a gate-1 rejection is never misattributed to gate 2.
                         self.current_gate.lifecycle = GateLifecycle.WAITING
                         while True:
-                            # Drain rejections not yet durably persisted.
+                            # Drain rejections not yet durably persisted (D3:
+                            # idempotent via flushed_rejection_ids).
                             if self.flushed_rejections < len(self.pending_rejections):
-                                to_flush = self.pending_rejections[
-                                    self.flushed_rejections :
-                                ]
-                                await persist_human_gate_rejections_activity(
-                                    state.run_id, task.task_id, gate_id, to_flush
+                                await self._flush_pending_rejections(
+                                    state.run_id, task.task_id, gate_id
                                 )
-                                self.flushed_rejections = len(self.pending_rejections)
                                 continue
                             # A valid decision for this gate releases the wait.
                             if gate_id in self.accepted_decisions:
@@ -1608,14 +1693,9 @@ class FsasmMilestoneFourWorkflow:
                         # Flush any remaining rejections recorded before the
                         # accepted decision so the audit is complete before the
                         # transition is applied.
-                        if self.flushed_rejections < len(self.pending_rejections):
-                            to_flush = self.pending_rejections[
-                                self.flushed_rejections :
-                            ]
-                            await persist_human_gate_rejections_activity(
-                                state.run_id, task.task_id, gate_id, to_flush
-                            )
-                            self.flushed_rejections = len(self.pending_rejections)
+                        await self._flush_pending_rejections(
+                            state.run_id, task.task_id, gate_id
+                        )
 
                         # Consume the accepted decision for this gate.
                         decision = self.accepted_decisions[gate_id]
@@ -1650,6 +1730,17 @@ class FsasmMilestoneFourWorkflow:
                             plan = state.plan if state.plan is not None else plan
                             final_human_decision = applied_decision
                             self.current_gate.lifecycle = GateLifecycle.DECISION_APPLIED
+
+                            # D1: flush any rejection that arrived DURING the
+                            # application activity (after the pre-application
+                            # flush, before gate closure) and attribute it to the
+                            # closing gate. This must happen BEFORE the open-gate
+                            # identity is invalidated, while current_gate still
+                            # identifies the closing gate so the rejection is
+                            # not lost or misattributed to a later gate.
+                            await self._flush_pending_rejections(
+                                state.run_id, task.task_id, gate_id
+                            )
 
                             # T06: close the gate. Invalidate the open-gate
                             # identity so a later signal (stale gate, future gate,
@@ -1686,6 +1777,11 @@ class FsasmMilestoneFourWorkflow:
                             # gate state (the task is READY from the first application).
                             # This branch cannot normally run here because the gate is
                             # consumed once, but it documents exactly-once application.
+                            # D1: still flush any rejection that arrived during
+                            # this iteration before closing the gate.
+                            await self._flush_pending_rejections(
+                                state.run_id, task.task_id, gate_id
+                            )
                             self.current_gate = None
                             self.current_gate_id = None
                             self.accepted_decisions.pop(gate_id, None)
