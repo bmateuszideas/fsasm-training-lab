@@ -274,6 +274,26 @@ class ModelCallBudget(BaseModel):
     max_time_ms: int | None = Field(default=None, ge=1)
 
 
+class ExecutorOutcomeReason(str, Enum):
+    """Normalized terminal reasons for one Executor attempt (architecture \u00a724).
+
+    These are the normalized outcomes of the Executor Loop for ONE
+    ``task_attempt``. They are NOT domain statuses and grant no PASS: a
+    ``COMPLETED`` outcome is a request for the Verification Plane, not a PASS
+    claim \u2014 only the Domain Core grants the task transition after the
+    Verifier inspects the real artifact. The Executor never grants PASS,
+    retry or gate; it reports why it stopped (architecture \u00a724; canonical
+    TODO T17).
+    """
+
+    COMPLETED = "completed"
+    NEEDS_INFORMATION = "needs_information"
+    ESCALATION_REQUESTED = "escalation_requested"
+    STEP_LIMIT_REACHED = "step_limit_reached"
+    TOOL_ERROR = "tool_error"
+    POLICY_BLOCKED = "policy_blocked"
+
+
 class BudgetUsage(BaseModel):
     """Live counters against a :class:`ModelCallBudget` for one attempt."""
 
@@ -317,6 +337,7 @@ class BudgetUsage(BaseModel):
 __all__ = [
     "BudgetUsage",
     "EscalationRequest",
+    "ExecutorOutcomeReason",
     "FinalResponse",
     "InvalidResponse",
     "ModelCallBudget",
