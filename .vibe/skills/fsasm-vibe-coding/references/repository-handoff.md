@@ -1,6 +1,6 @@
 # FS-ASM — repository handoff / jeden bieżący punkt statusowy
 
-**Aktualizacja dokumentacji:** 17.09.2026. **Zweryfikowany punkt odniesienia:** `Fsasm-experimental` @ `3f1c12f04538ecf77fc729f86919eb0a83d21214` (merge PR #21). To datowany snapshot, nie gwarancja aktualnego HEAD. Każda kolejna sesja weryfikuje żywy HEAD, PR i CI przed rozpoczęciem zadania.
+**Aktualizacja dokumentacji:** 17.09.2026. **Zweryfikowany punkt odniesienia:** `Fsasm-experimental` @ `2488dac886e3987e181003c2e83896c04172dd56` (merge PR #22, odświeżenie handoffu po PR #21). To datowany snapshot, nie gwarancja aktualnego HEAD. Każda kolejna sesja weryfikuje żywy HEAD, PR i CI przed rozpoczęciem zadania.
 
 ## Cel i uprawnienia
 
@@ -16,11 +16,11 @@
 
 ## Jedyny bieżący krok i status decyzji
 
-**Następny krok: niezależna weryfikacja G3–G5 na aktualnym `Fsasm-experimental`.** Najpierw sprawdź nowy HEAD i CI, odtwórz trzy przypadki Human Gate opisane w audycie Astry na rzeczywistym aktualnym kodzie i testach oraz zapisz dla każdego wynik, reprodukcję i SHA. Nie zakładaj ani naprawienia G3–G5 przez PR #20, ani ich dalszego występowania bez reprodukcji. To krok weryfikacyjny, nie automatyczne zlecenie zmian kodu ani zgoda na zamknięcie M4.
+**Kanon kolejności:** [Kanoniczny program wykonawczy](../../../../fsasm-first/docs/FSASM_RUNTIME_V1_CANONICAL_TODO.md) (T00–T34 + bramki) jest jedynym aktywnym programem kolejności prac. Wczesna [kolejka migracji](../../../../fsasm-first/docs/MIGRATION_BACKLOG_V1.md) jest teraz dokumentem historycznym zastąpionym przez kanoniczne TODO.
 
-**Nierozstrzygnięta decyzja użytkownika:** czy nadal dopuszczać sygnały legacy Human Gate bez jawnego `gate_id`. Przed taskiem kodowym zmieniającym tę semantykę uzyskaj osobną decyzję użytkownika, korzystając z ustaleń reprodukcji. Nie rozpoczynaj M5 ani innych pozycji backlogu bez odrębnej zgody.
+**Następny krok: T01 — niezależna reprodukcja G3, G4 i G5 na aktualnym `Fsasm-experimental`.** T00 (umieszczenie kanonicznego TODO w repo, oznaczenie backlogu jako historyczny i odświeżenie tego handoffu) jest `READY FOR REVIEW` w swoim PR; nie jest `ACCEPTED` i nie autoryzuje automatycznie T01. Po ewentualnej akceptacji T01: sprawdź nowy HEAD i CI, odtwórz trzy przypadki Human Gate opisane w audycie Astry na rzeczywistym aktualnym kodzie i testach oraz zapisz dla każdego wynik, reprodukcję i SHA. Nie zakładaj ani naprawienia G3–G5 przez PR #20, ani ich dalszego występowania bez reprodukcji. To krok weryfikacyjny, nie automatyczne zlecenie zmian kodu ani zgoda na zamknięcie M4.
 
-[Backlog migracji](../../../../fsasm-first/docs/MIGRATION_BACKLOG_V1.md) jest propozycją, nie automatycznym upoważnieniem do realizacji Q1–Q11. G3–G5 to reprodukcje komponentowe, nie dowód produkcyjnego przejęcia ani automatycznie zamknięte defekty.
+**Nierozstrzygnięta decyzja użytkownika:** czy nadal dopuszczać sygnały legacy Human Gate bez jawnego `gate_id`. Przed taskiem kodowym zmieniającym tę semantykę (T03) uzyskaj osobną decyzję użytkownika, korzystając z ustaleń reprodukcji T01. Nie rozpoczynaj M5 ani innych pozycji poza kanonicznym TODO bez odrębnej zgody.
 
 ## Jak aktualizować
 

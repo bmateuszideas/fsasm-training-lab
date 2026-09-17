@@ -1,5 +1,7 @@
 # FS-ASM v1 — kolejka migracji do zatwierdzenia
 
+> **DOKUMENT HISTORYCZNY.** Ten plik jest wczesną propozycją kolejności migracji, **zastąpioną przez kanoniczny program wykonawczy** [`FSASM_RUNTIME_V1_CANONICAL_TODO.md`](FSASM_RUNTIME_V1_CANONICAL_TODO.md) (ustanowiony 17.09.2026). Kanoniczne TODO jest jedynym aktywnym programem kolejności; tabela Q0–Q11 oraz etap laptop poniżej pozostają wyłącznie jako odniesienie historyczne i **nie upoważniają** do rozpoczęcia żadnego taska. Źródłowy audyt pozostaje ważnym dowodem historycznym: [audyt Astry](reviews/FSASM_V1_ARCHITECTURE_GAP_ANALYSIS_AND_MIGRATION_PLAN_2026-09-17.md), badany na `142db38`.
+
 **Status: PROPOZYCJA, nie polecenie implementacji. Aktualizacja 17.09.2026 po merge PR #20.** Jedyna architektura: [pełny dokument v1](FSASM_ARCHITEKTURA_RUNTIME_V1_ZATWIERDZONA_2026-09-17.md). Źródło szczegółowych reprodukcji i pierwotnych Q1–Q12: [audyt Astry](reviews/FSASM_V1_ARCHITECTURE_GAP_ANALYSIS_AND_MIGRATION_PLAN_2026-09-17.md), badany na `142db38`. Ten plan koryguje jedynie datowane fakty i kolejność startową; nie jest audytem każdego późniejszego SHA.
 
 | Etap | Cel | Granica odbioru |
