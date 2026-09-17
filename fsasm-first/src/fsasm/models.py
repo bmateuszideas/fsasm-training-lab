@@ -406,10 +406,23 @@ class VerificationCheck(BaseModel):
     check_name: str = Field(..., description="Name/description of the check.")
     passed: bool = Field(..., description="Whether the check passed.")
     message: str = Field(default="", description="Additional message about the check.")
+    # T13: identity of the check this result records (e.g. CheckKind or a
+    # stable name), so a check result binds to one operation + artifact.
+    check_identity: str | None = Field(
+        default=None, description="Identity of the check this result records, if bound."
+    )
 
 
 class VerificationResult(BaseModel):
-    """Result of verification for a task or plan."""
+    """Result of verification for a task or plan.
+
+    T13 binds a v1 verification result to the full identity of the attempt it
+    verifies: ``run_id``, ``task_id``, ``attempt``, ``operation_id``,
+    ``artifact_id`` and ``evidence_refs``. The legacy fields remain; the new
+    fields are optional so M1–M4 callers keep working, but the v1 Verifier
+    sets them. ``status=PASS`` with empty ``evidence_refs`` or a foreign/stale
+    identity must be rejected by the Domain Core (architecture §30; F8).
+    """
 
     run_id: str = Field(..., description="The run ID this verification belongs to.")
     task_id: str | None = Field(
@@ -421,6 +434,22 @@ class VerificationResult(BaseModel):
     )
     message: str = Field(
         default="", description="Summary message for the verification."
+    )
+    # T13 identity binding. Optional for M1–M4; the v1 Verifier populates them.
+    attempt: int | None = Field(
+        default=None, ge=0, description="The attempt this result verifies, if bound."
+    )
+    operation_id: str | None = Field(
+        default=None,
+        description="The tool operation this result verifies, if bound.",
+    )
+    artifact_id: str | None = Field(
+        default=None,
+        description="The artifact id this result verifies, if bound.",
+    )
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description="Evidence ids accepted for this result (current attempt).",
     )
 
 
@@ -606,7 +635,16 @@ class Plan(BaseModel):
 
 
 class EvidenceRecord(BaseModel):
-    """Record of evidence supporting a verification or task result."""
+    """Record of evidence supporting a verification or task result.
+
+    T13 binds evidence to the full identity of the attempt it proves:
+    ``run_id``, ``task_id``, ``attempt``, ``operation_id``, ``artifact_id`` and
+    ``check_identity``. The legacy M1–M4 fields (``evidence_id``/``kind``/
+    ``source``/``payload``) remain; the new fields are optional so existing
+    callers keep working, but the v1 Verifier always sets them. Evidence must
+    be accepted into the snapshot for the CURRENT attempt before PASS; orphan
+    or stale evidence must not yield PASS (architecture §29, §30; F8).
+    """
 
     evidence_id: str = Field(
         ..., description="Unique identifier for this evidence record."
@@ -627,6 +665,24 @@ class EvidenceRecord(BaseModel):
     created_at: str = Field(
         default_factory=lambda: datetime.utcnow().isoformat() + "Z",
         description="ISO 8601 timestamp when evidence was created.",
+    )
+    # T13 identity binding for the v1 Verification Plane. Optional to keep M1–M4
+    # callers unchanged; the v1 Verifier populates them so evidence is bound to
+    # one attempt + operation + artifact + check.
+    attempt: int | None = Field(
+        default=None, ge=0, description="The attempt this evidence proves, if bound."
+    )
+    operation_id: str | None = Field(
+        default=None,
+        description="The tool operation that produced this evidence, if bound.",
+    )
+    artifact_id: str | None = Field(
+        default=None,
+        description="The artifact id this evidence refers to, if bound.",
+    )
+    check_identity: str | None = Field(
+        default=None,
+        description="Identity of the check (e.g. CheckKind) this evidence proves, if bound.",
     )
 
     @field_validator("evidence_id")
