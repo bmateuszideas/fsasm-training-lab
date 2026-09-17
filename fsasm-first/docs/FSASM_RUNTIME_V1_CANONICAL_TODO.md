@@ -419,10 +419,10 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Proponowane:** `src/fsasm/adapters/mistral.py`, modyfikacja `planner_activities.py`, `tests/test_v1_mistral_adapter_contract.py`.
 
-- [ ] Użyć jednego transportowego adaptera Mistral z konfigurowanymi logicznymi rolami, bez zakładania konkretnych nazw modeli.
-- [ ] Przepodłączyć Planner do wspólnego Gateway bez zmiany własności Task Compilera.
-- [ ] Znormalizować tool calls, błędy, usage i rate/transport failure.
-- [ ] Testy nie wykonują płatnych ani live wywołań.
+- [x] Użyć jednego transportowego adaptera Mistral z konfigurowanymi logicznymi rolami, bez zakładania konkretnych nazw modeli.
+- [x] Przepodłączyć Planner do wspólnego Gateway bez zmiany własności Task Compilera.
+- [x] Znormalizować tool calls, błędy, usage i rate/transport failure.
+- [x] Testy nie wykonują płatnych ani live wywołań.
 
 **Odbiór:** Planner oraz role A/B korzystają z jednego kontraktu, adapter nie zawiera retry domenowego, uprawnień ani decyzji PASS.
 
