@@ -138,17 +138,10 @@ class PlannerProposal(BaseModel):
     """
 
     tasks: list[TaskProposal] = Field(
-        ..., min_length=3, max_length=3, description="Exactly 3 task proposals."
+        ...,
+        min_length=1,
+        description="At least 1 task proposal. Three tasks are a test scenario, not a domain limit (T08).",
     )
-
-    @field_validator("tasks")
-    @classmethod
-    def validate_task_count(cls, v: list[TaskProposal]) -> list[TaskProposal]:
-        if len(v) != 3:
-            raise ValueError(
-                "Proposal must contain exactly 3 TaskProposal for milestone 1"
-            )
-        return v
 
 
 class PlannerConfig(BaseModel):
@@ -318,14 +311,72 @@ class PlannerMetadata(BaseModel):
         return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+class RunConstraints(BaseModel):
+    """Approved human constraints for a run (T08 Trusted Intake).
+
+    These are the authoritative boundaries the human approved at intake. They
+    are the ONLY source of privilege: the LLM/Planner may propose task content
+    but cannot widen ``allowed_files``/``allowed_tools``/``max_tasks`` beyond
+    these values. The Task Compiler rejects any task whose proposed scope
+    exceeds the approved constraints.
+
+    All fields are optional; ``None``/empty means "not restricted by intake"
+    and the runtime default applies. Lists are validated by the compiler,
+    not trusted from the proposal.
+    """
+
+    allowed_files: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Workspace file globs the human approved for modification. A task "
+            "may propose a subset, never a superset. Empty = no files approved."
+        ),
+    )
+    allowed_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Tool kinds the human approved (e.g. 'read_file', 'apply_patch'). "
+            "Empty = no tools approved beyond runtime defaults."
+        ),
+    )
+    max_tasks: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum number of Child Tasks in the plan (intake cap).",
+    )
+    max_attempts_per_task: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum attempts per Child Task (intake cap).",
+    )
+    workspace_scope: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Workspace root-relative directory globs the human approved as the "
+            "maximum scope. A task's allowed_files must fall under one of these. "
+            "Empty = the whole workspace root is approved."
+        ),
+    )
+
+
 class GoalInput(BaseModel):
-    """Input for a new FS-ASM run - the user's goal."""
+    """Input for a new FS-ASM run - the user's goal and approved constraints.
+
+    The ``goal`` is the authoritative objective. ``constraints`` carries the
+    human-approved boundaries (file/tool/scope/task/attempt caps) that the
+    Task Compiler enforces; the Planner/LLM cannot widen them. ``run_id`` is
+    optional and owned by the runtime.
+    """
 
     goal: str = Field(
         ..., min_length=1, description="The goal to achieve. Cannot be blank."
     )
     run_id: str | None = Field(
         default=None, description="Optional run ID. If omitted, one will be generated."
+    )
+    constraints: RunConstraints = Field(
+        default_factory=RunConstraints,
+        description="Human-approved constraints; the only source of privilege.",
     )
 
     @field_validator("goal")
