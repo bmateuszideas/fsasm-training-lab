@@ -110,6 +110,17 @@ class RunStarted(_DomainEvent):
     """The run began executing its plan (PLANNED→RUNNING)."""
 
 
+class TaskReadied(_DomainEvent):
+    """A scheduled task became ready to execute (PENDING→READY).
+
+    The Scheduler qualifies a PENDING task whose dependencies are all PASSED;
+    the Domain Core owns this transition so the one event path remains the only
+    mutation path. ``TaskActivated`` then moves the ready task to RUNNING.
+    """
+
+    task_id: str
+
+
 class TaskActivated(_DomainEvent):
     """A scheduled task began an execution attempt (READY→RUNNING).
 
@@ -225,6 +236,7 @@ class RunFailed(_DomainEvent):
 DomainEvent = Union[
     RunPlanned,
     RunStarted,
+    TaskReadied,
     TaskActivated,
     TaskBlocked,
     TaskUnblocked,
@@ -347,6 +359,12 @@ def _apply(state: RunState, event: DomainEvent) -> None:
     if isinstance(event, RunStarted):
         _check_run_transition(state, RunStatus.RUNNING)
         state.status = RunStatus.RUNNING
+        return
+
+    if isinstance(event, TaskReadied):
+        task = _find_task(state, event.task_id)
+        _check_task_transition(task, TaskStatus.READY)
+        task.status = TaskStatus.READY
         return
 
     if isinstance(event, TaskActivated):
