@@ -638,13 +638,29 @@ class EvidenceRecord(BaseModel):
 
 
 class ToolOperationKind(str, Enum):
-    """Kinds of tool operations the Tool Broker can perform (T11)."""
+    """Kinds of tool operations the Tool Broker can perform (T11/T12)."""
 
     LIST_FILES = "list_files"
     READ_FILE = "read_file"
     SEARCH_CODE = "search_code"
     APPLY_PATCH = "apply_patch"
     INSPECT_CHANGES = "inspect_changes"
+    RUN_CHECKS = "run_checks"
+
+
+class CheckKind(str, Enum):
+    """Allowlisted kinds of trusted checks the broker may run (T12).
+
+    The broker maps a logical ``CheckKind`` to a fixed, trusted argv prefix; it
+    never lets the model name an executable or compose a shell string. A
+    ``CUSTOM`` check carries a bare command name and arguments validated the
+    same way as the fixed kinds (no shell interpolation, no path separators).
+    """
+
+    PYTEST = "pytest"
+    PYTEST_FILE = "pytest_file"
+    RUFF_CHECK = "ruff_check"
+    CUSTOM = "custom"
 
 
 class ToolObservation(BaseModel):
@@ -687,6 +703,35 @@ class ToolObservation(BaseModel):
     matches: list[str] = Field(
         default_factory=list,
         description="Workspace-relative paths (list/search) or matched lines, if any.",
+    )
+    # run_checks / process fields (T12). Populated for ``RUN_CHECKS`` only.
+    check_kind: CheckKind | None = Field(
+        default=None,
+        description="The allowlisted check kind that produced this observation, if any.",
+    )
+    exit_code: int | None = Field(
+        default=None,
+        description="Process exit code for run_checks (None when not run).",
+    )
+    stdout: str = Field(
+        default="",
+        description="Captured stdout for run_checks, truncated to the output limit.",
+    )
+    stderr: str = Field(
+        default="",
+        description="Captured stderr for run_checks, truncated to the output limit.",
+    )
+    duration_ms: int | None = Field(
+        default=None,
+        description="Process wall-clock duration in ms for run_checks, if run.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True when stdout/stderr was truncated to the output limit.",
+    )
+    timed_out: bool = Field(
+        default=False,
+        description="True when the process was killed for exceeding the timeout.",
     )
 
 
