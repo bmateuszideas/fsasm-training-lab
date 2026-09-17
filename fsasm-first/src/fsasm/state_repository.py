@@ -22,9 +22,14 @@ commit_snapshot); the demonstrator's imperative path remains intact and green.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fsasm.errors import PersistenceError
 from fsasm.models import RunState
 from fsasm.persistence import RuntimePersistence
+
+if TYPE_CHECKING:
+    from fsasm.domain import DomainEvent
 
 
 class StaleRevisionError(PersistenceError):
@@ -215,3 +220,45 @@ class StateRepository:
         committed.touch()
         self._persistence.commit_run_state(committed)
         return committed
+
+    def advance(
+        self,
+        run_id: str,
+        expected_revision: int,
+        event: "DomainEvent",
+    ) -> RunState:
+        """One v1 mutation step: load → apply_event → commit_snapshot.
+
+        This is the activity adapter (T07): an activity supplies an identity
+        (``run_id``), the ``expected_revision`` it observed, and a validated
+        domain event. The repository loads the authoritative snapshot, applies
+        the event via the pure ``apply_event`` (no I/O, no input mutation), and
+        commits the result atomically with the optimistic-concurrency guard.
+
+        An **outdated activity** — one whose ``expected_revision`` is stale
+        because a newer commit landed first — is rejected with
+        ``StaleRevisionError`` and does NOT overwrite newer state. A technical
+        retry that calls ``advance`` with a non-attempt event (e.g.
+        ``EvidenceAccepted``) does NOT increment ``task_attempt``: only a
+        ``TaskActivated`` event does, because that is the only place
+        ``apply_event`` increments the attempt counter.
+
+        Returns:
+            The committed ``RunState`` (with the incremented ``revision``).
+        """
+        from fsasm.domain import apply_event
+
+        current = self.load(run_id)
+        if current.revision != expected_revision:
+            raise StaleRevisionError(
+                message=(
+                    f"stale revision for run '{run_id}': expected "
+                    f"{expected_revision} but on-disk authoritative revision is "
+                    f"{current.revision}"
+                ),
+                run_id=run_id,
+                expected=expected_revision,
+                actual=current.revision,
+            )
+        next_state = apply_event(current, event)
+        return self.commit_snapshot(run_id, expected_revision, next_state)
