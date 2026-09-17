@@ -72,6 +72,7 @@ from workflows.fsasm_milestone_four import (
     persist_retry_state_activity,
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
+    persist_human_gate_rejections_activity,
     persist_initial_state_activity,
     persist_final_m4_state_activity,
 )
@@ -790,6 +791,7 @@ class TestScenarioAWorker:
                 transition_to_needs_human_activity,
                 validate_and_apply_human_decision_activity,
                 persist_final_m4_state_activity,
+                persist_human_gate_rejections_activity,
             ],
         ):
             # Execute workflow with STUB backend, max_retries=2 (3 total attempts), fail_first=1
@@ -952,6 +954,7 @@ class TestScenarioBWorker:
                 transition_to_needs_human_activity,
                 validate_and_apply_human_decision_activity,
                 persist_final_m4_state_activity,
+                persist_human_gate_rejections_activity,
             ],
         ):
             # Execute workflow with max_retries=1 (2 total attempts), always fail
@@ -1144,6 +1147,7 @@ class TestScenarioCWorker:
                 transition_to_needs_human_activity,
                 validate_and_apply_human_decision_activity,
                 persist_final_m4_state_activity,
+                persist_human_gate_rejections_activity,
             ],
         ):
             # Execute workflow with max_retries=0 (1 total attempt), fail first
@@ -1431,6 +1435,7 @@ class TestSignalCannotBeLost:
                 transition_to_needs_human_activity,
                 validate_and_apply_human_decision_activity,
                 persist_final_m4_state_activity,
+                persist_human_gate_rejections_activity,
             ],
         ):
             # Execute workflow with max_retries=0 (1 total attempt), always fail
@@ -1609,6 +1614,7 @@ class TestRetryOnceRegressionWorker:
                 transition_to_needs_human_activity,
                 validate_and_apply_human_decision_activity,
                 persist_final_m4_state_activity,
+                persist_human_gate_rejections_activity,
             ],
         ):
             # Execute workflow with max_retries=0 (1 total attempt), always fail

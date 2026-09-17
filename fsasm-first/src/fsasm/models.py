@@ -630,7 +630,18 @@ class HumanDecision(BaseModel):
     """
     Human decision model for Human Gate.
 
-    Represents a typed human decision with task context.
+    Represents a typed human decision with task context and explicit identity.
+
+    Identity fields (F6/F7):
+    - ``gate_id``: identifies one occurrence of a Human Gate for a task. A
+      deterministic value derived from run_id/task_id/attempt (the attempt at
+      gate time uniquely identifies each consecutive gate occurrence for the
+      same task). It distinguishes successive gates for the SAME task and
+      cannot collide across legitimate gate occurrences.
+    - ``decision_id``: identifies one logical human decision. Deterministic from
+      run_id/task_id/gate_id/action so that the same logical decision is
+      idempotent and a contradictory reuse of the same decision_id is rejected.
+
     Signal handlers must only mutate deterministic workflow-local data.
     Validate and persist the decision through domain/activity code.
     """
@@ -640,6 +651,21 @@ class HumanDecision(BaseModel):
         ..., description="Human decision action: RETRY_ONCE or ABORT."
     )
     reason: str = Field(default="", description="Optional reason for the decision.")
+    gate_id: str | None = Field(
+        default=None,
+        description=(
+            "Deterministic identifier of the gate occurrence this decision "
+            "targets (run_id/task_id/attempt). Set by the workflow before the "
+            "decision is applied."
+        ),
+    )
+    decision_id: str | None = Field(
+        default=None,
+        description=(
+            "Deterministic identifier of this logical decision "
+            "(run_id/task_id/gate_id/action). Used for idempotent application."
+        ),
+    )
 
     @field_validator("task_id")
     @classmethod

@@ -58,6 +58,7 @@ from workflows.fsasm_milestone_four import (
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
 )
 from fsasm.planner_activities import plan_activity
 
@@ -80,6 +81,7 @@ _M4_ACTIVITIES = [
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
 ]
 
 
@@ -147,6 +149,29 @@ def isolated_runtime(tmp_path, monkeypatch):
                         loaded.model_dump_json()
                     )
                     captures["first_plan_run_id"] = loaded.run_id
+            return result
+
+        def commit_run_state(self, state):
+            # F3: commit_run_state writes the authoritative snapshot (state.json)
+            # first, then the derived plan.json. Capture both, exactly once,
+            # so the S2 ordering test observes the first persisted PLANNED
+            # snapshot rather than a later RUNNING snapshot.
+            result = self._inner.commit_run_state(state)
+            if state.run_id == captures.get("target_run_id"):
+                if captures["first_state"] is None:
+                    loaded = self._inner.load_run_state(state.run_id)
+                    if loaded is not None:
+                        captures["first_state"] = type(loaded).model_validate_json(
+                            loaded.model_dump_json()
+                        )
+                        captures["first_state_run_id"] = loaded.run_id
+                if captures["first_plan"] is None and state.plan is not None:
+                    loaded = self._inner.load_plan(state.run_id)
+                    if loaded is not None:
+                        captures["first_plan"] = type(loaded).model_validate_json(
+                            loaded.model_dump_json()
+                        )
+                        captures["first_plan_run_id"] = loaded.run_id
             return result
 
         def __getattr__(self, name):

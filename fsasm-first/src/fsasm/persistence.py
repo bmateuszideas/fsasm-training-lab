@@ -14,7 +14,11 @@ from fsasm.models import (
     RunState,
     VerificationResult,
 )
-from fsasm.errors import InvalidIdentifierError, PersistenceError
+from fsasm.errors import (
+    InvalidIdentifierError,
+    PersistenceError,
+    RunAlreadyExistsError,
+)
 
 
 # =============================================================================
@@ -306,6 +310,228 @@ class RuntimePersistence:
         return path
 
     # =========================================================================
+    # F4 RUN-CREATION BOUNDARY
+    # =========================================================================
+    #
+    # ``create_run`` is the explicit new-run creation boundary. It atomically
+    # reserves the run directory using exclusive creation (``mkdir`` with
+    # ``exist_ok=False``) so that two concurrent local creation attempts for the
+    # same ``run_id`` cannot both succeed, and an existing run cannot be silently
+    # reinitialized. F5's identifier validation and symlink containment are
+    # applied first. A successful ``create_run`` establishes exclusive ownership
+    # of the run directory; subsequent normal internal writes to an established
+    # run (``save_plan`` / ``save_run_state`` / ...) are NOT creation operations
+    # and remain unaffected.
+    #
+    # The reservation marker file (``.fsasm-run``) records that this directory is
+    # a legitimately created FS-ASM run (rather than a partially initialized or
+    # foreign directory), so recovery can distinguish a crashed creation from a
+    # clean existing run (F3).
+
+    _RESERVATION_MARKER = ".fsasm-run"
+
+    def create_run(self, run_id: str) -> Path:
+        """Atomically reserve the run directory for a new run.
+
+        This is the F4 identity boundary: it separates *creating* a new run
+        from *accessing* or *resuming* an existing run. It MUST be called before
+        the first ``save_plan`` / ``save_run_state`` for a new run.
+
+        Args:
+            run_id: The run identifier to create. Validated by the F5 policy.
+
+        Returns:
+            The reserved run directory ``Path``.
+
+        Raises:
+            InvalidIdentifierError: If ``run_id`` is path-unsafe (F5).
+            RunAlreadyExistsError: If the run directory already exists
+                (whether fully or partially initialized), so a duplicate
+                creation cannot silently overwrite existing state, plan,
+                evidence or log history.
+        """
+        run_dir = self._get_run_dir(run_id)
+        # Exclusive creation: race-free on a local filesystem. ``exist_ok=False``
+        # raises ``FileExistsError`` if the directory already exists, even if it
+        # was created concurrently between the F5 check and this call.
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise RunAlreadyExistsError(
+                f"Run '{run_id}' already exists; cannot create a new run with "
+                f"this run_id (use resume/load to access an existing run)",
+                run_id=run_id,
+            ) from exc
+        # Write the reservation marker atomically so the directory is a
+        # legitimately created FS-ASM run. This marker survives partial
+        # initialization and crash recovery (F3).
+        marker = run_dir / self._RESERVATION_MARKER
+        try:
+            self._atomic_write_marker(marker, {"run_id": run_id})
+        except Exception:
+            # If the marker write fails, remove the empty reservation so the
+            # creation can be retried cleanly rather than leaving a half-created
+            # run that blocks future creation.
+            import shutil
+
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise
+        return run_dir
+
+    def _atomic_write_marker(self, path: Path, data: dict[str, Any]) -> None:
+        """Write the reservation marker atomically."""
+        try:
+            temp_fd, temp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            try:
+                with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, path)
+            except Exception:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+        except Exception as exc:
+            raise PersistenceError(
+                message=f"Failed to write reservation marker {path}: {exc}",
+                path=str(path),
+                operation="create_run_marker",
+            ) from exc
+
+    def is_run_initialized(self, run_id: str) -> bool:
+        """Return True if the run directory exists AND was created via ``create_run``.
+
+        A directory that merely exists but lacks the reservation marker is a
+        partially initialized or foreign directory, not a legitimately created
+        run. This distinction supports F3 crash recovery and F4 duplicate
+        detection.
+        """
+        run_dir = self._get_run_dir(run_id)
+        return run_dir.exists() and (run_dir / self._RESERVATION_MARKER).exists()
+
+    def assert_run_initialized(self, run_id: str) -> None:
+        """Raise ``PersistenceError`` if the run was not created via ``create_run``.
+
+        Used by internal write paths to guard against writes to a partially
+        initialized or foreign directory that should not be treated as a run.
+        """
+        if not self.is_run_initialized(run_id):
+            raise PersistenceError(
+                message=(
+                    f"Run '{run_id}' is not initialized; create_run() must be "
+                    f"called before any save operation for a new run"
+                ),
+                path=str(self._get_run_dir(run_id)),
+                operation="assert_run_initialized",
+            )
+
+    # =========================================================================
+    # F3 AUTHORITATIVE SNAPSHOT / RECOVERY
+    # =========================================================================
+    #
+    # Crash-consistency contract for this laboratory:
+    #
+    #   * ``state.json`` (with its embedded ``RunState.plan``) is the
+    #     authoritative run-state snapshot.
+    #   * ``plan.json`` is a derived/materialized view of that authoritative
+    #     snapshot. It exists for direct inspection and legacy readers, but it
+    #     is NEVER a second competing authority.
+    #   * A task transition is not considered durably committed until the
+    #     authoritative snapshot (``state.json``) has been atomically committed.
+    #   * Readers and recovery code must not treat a newer or partially written
+    #     ``plan.json`` as authoritative over ``state.json``.
+    #
+    # ``commit_run_state`` writes the authoritative snapshot first and the
+    # derived ``plan.json`` second (from the authoritative state's plan), so the
+    # derived view can never be newer than the authoritative snapshot. A crash
+    # between the two writes leaves a possibly-stale ``plan.json`` that recovery
+    # repairs from ``state.json``.
+    #
+    # This does NOT make evidence/log writes part of the same atomic
+    # transaction as state.json; those remain separate supplementary artifacts
+    # (see the F3 limitation note). Recovery guarantees logical plan/state
+    # consistency, not a fully transactional store.
+
+    def commit_run_state(self, state: RunState) -> None:
+        """Commit the authoritative run-state snapshot, then refresh the derived plan view.
+
+        F3 authoritative-snapshot boundary:
+        1. Write ``state.json`` (with the embedded plan) atomically first.
+        2. Write ``plan.json`` (derived from ``state.plan``) atomically second.
+
+        A crash between (1) and (2) leaves ``plan.json`` stale relative to
+        ``state.json``; ``recover_run`` / ``load_plan`` reconcile or repair it.
+        A crash before (1) leaves the previous authoritative snapshot intact.
+
+        Args:
+            state: The authoritative RunState (with ``state.plan`` embedded).
+
+        Raises:
+            PersistenceError: If either write fails. If the authoritative write
+                fails, the derived view is NOT written (no newer derived view
+                is ever left without a matching authoritative snapshot).
+        """
+        # Authoritative snapshot first. If this fails, do not write the derived
+        # view: a derived view newer than the authoritative snapshot is exactly
+        # the contradictory-state F3 forbids.
+        state_path = self._get_state_path(state.run_id)
+        self._atomic_write_json(state_path, state)
+
+        # Derived view second, from the authoritative state's plan. A crash
+        # here leaves a stale plan.json that recovery repairs from state.json.
+        if state.plan is not None:
+            plan_path = self._get_plan_path(state.run_id)
+            self._atomic_write_json(plan_path, state.plan)
+
+    def recover_run(self, run_id: str) -> RunState:
+        """Recover the authoritative run state, repairing the derived plan view.
+
+        F3 recovery contract:
+        - ``state.json`` is the single source of truth.
+        - If ``state.json`` is missing or corrupt, raise ``PersistenceError``
+          (do NOT silently substitute ``plan.json`` or fabricate state).
+        - If ``state.json`` is valid, repair ``plan.json`` from the embedded
+          ``state.plan`` so the derived view matches the authoritative snapshot.
+        - Recovery is idempotent: repeated recovery produces the same result.
+        - F4's duplicate-creation protection and F5's path validation remain
+          effective (recovery never creates a new run; it validates the
+          identifier and asserts the run was initialized).
+
+        Args:
+            run_id: The run to recover.
+
+        Returns:
+            The recovered authoritative RunState.
+
+        Raises:
+            PersistenceError: If the run was not created via ``create_run``,
+                if ``state.json`` is missing/corrupt, or if repair fails.
+        """
+        self._validate_run_id(run_id)
+        self.assert_run_initialized(run_id)
+
+        state = self.load_run_state(run_id)
+        if state is None:
+            raise PersistenceError(
+                message=(
+                    f"Cannot recover run '{run_id}': authoritative state.json is "
+                    f"missing; refusing to fabricate state from a derived view"
+                ),
+                path=str(self._get_state_path(run_id)),
+                operation="recover_run",
+            )
+        # load_run_state already raises PersistenceError on corrupt JSON; if we
+        # reach here state is a valid RunState.
+
+        # Repair the derived plan.json from the authoritative snapshot's plan.
+        if state.plan is not None:
+            plan_path = self._get_plan_path(run_id)
+            self._atomic_write_json(plan_path, state.plan)
+
+        return state
+
+    # =========================================================================
     # ATOMIC WRITE HELPERS
     # =========================================================================
 
@@ -503,19 +729,63 @@ class RuntimePersistence:
 
     def load_plan(self, run_id: str) -> Plan | None:
         """
-        Load a Plan from JSON file.
+        Load a Plan for a run.
+
+        F3 authoritative-snapshot contract: ``state.json`` (with its embedded
+        plan) is the single source of truth. When ``state.json`` exists and
+        contains an embedded plan, that authoritative plan is returned and the
+        derived ``plan.json`` is never treated as a competing authority (a
+        stale or partially written ``plan.json`` cannot contradict the
+        authoritative snapshot).
+
+        Fail-closed rule for F4-initialized runs: a run created via
+        ``create_run`` (reservation marker present) treats ``state.json`` as
+        the sole authority. If ``state.json`` is absent, or exists but has no
+        embedded plan, ``load_plan`` returns ``None`` rather than falling back
+        to an orphan/stale ``plan.json``. This prevents an F4-reserved
+        partially initialized run (or a run whose authoritative state lost its
+        plan) from presenting a derived ``plan.json`` as a legitimate plan.
+
+        Legacy-plan-only path: a directory that was NOT created via
+        ``create_run`` (no reservation marker) and has only ``plan.json`` keeps
+        the legacy read so existing legacy tests that intentionally persist a
+        standalone ``plan.json`` are not silently broken. ``state.json`` is
+        still preferred when present.
 
         Args:
             run_id: The run ID to load.
 
         Returns:
-            The loaded Plan, or None if not found.
+            The authoritative Plan (from ``state.json`` when present with an
+            embedded plan), a legacy standalone ``plan.json`` for an
+            unreserved run, or None.
 
         Raises:
-            PersistenceError: If load fails.
+            PersistenceError: If the authoritative ``state.json`` exists but is
+                corrupt, or if only a corrupt ``plan.json`` exists.
         """
+        # Authoritative snapshot first.
+        state = self.load_run_state(run_id)
+        if state is not None:
+            if state.plan is not None:
+                return state.plan
+            # state.json exists but has no embedded plan. For an F4-
+            # initialized run, the authority says "no plan": fail closed (do
+            # NOT fall through to an orphan/stale plan.json). For a legacy run
+            # (no reservation marker), fall through to the legacy plan-only
+            # read.
+            if self.is_run_initialized(run_id):
+                return None
+
+        # Legacy-plan-only path: only read a standalone plan.json for a run
+        # that was NOT created via create_run (no reservation marker). An
+        # F4-initialized run with absent authority never reaches here.
         path = self._get_plan_path(run_id)
         if not path.exists():
+            return None
+        if self.is_run_initialized(run_id):
+            # F4-initialized run with absent/plan-less authority: the orphan
+            # plan.json is NOT authoritative.
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:

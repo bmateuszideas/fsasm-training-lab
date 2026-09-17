@@ -226,6 +226,10 @@ async def persist_initial_state_activity(
         failed_task_ids=[],
     )
 
+    # F4: explicitly reserve the run directory before any write. A duplicate
+    # run_id is rejected here rather than silently overwriting existing state.
+    persistence.create_run(run_id)
+
     # Save plan
     persistence.save_plan(plan)
 
