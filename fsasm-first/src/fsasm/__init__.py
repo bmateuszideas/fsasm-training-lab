@@ -3,11 +3,13 @@
 from fsasm.models import (
     CheckKind,
     ChildTask,
+    ContextFragment,
     EvidenceRecord,
     GoalInput,
     Plan,
     RunState,
     RunStatus,
+    TaskContext,
     TaskStatus,
     ToolObservation,
     ToolOperationKind,
@@ -43,6 +45,8 @@ __all__ = [
     "RunState",
     "RunStatus",
     "TaskStatus",
+    "TaskContext",
+    "ContextFragment",
     # Errors
     "FSASMError",
     "InvalidTransitionError",

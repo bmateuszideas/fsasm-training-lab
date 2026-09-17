@@ -911,6 +911,102 @@ class GateOccurrence(BaseModel):
     )
 
 
+class ContextFragment(BaseModel):
+    """One source fragment selected into a TaskContext (T15).
+
+    Provenance is mandatory: every fragment records where it came from and why
+    it was selected, so the model's context is auditable and never includes a
+    file outside the approved scope. A fragment is a *projection* of a real
+    artifact; it is not itself an authority and grants no PASS.
+    """
+
+    source_path: str = Field(
+        ..., description="Workspace-relative path of the source fragment."
+    )
+    kind: str = Field(
+        ...,
+        description=(
+            "Why this fragment was selected: 'objective_source', 'test', "
+            "'symbol', 'dependency_output', 'prior_observation', "
+            "'prior_verification', 'decision', 'constraint'."
+        ),
+    )
+    content: str = Field(..., description="The selected text fragment.")
+    start_line: int | None = Field(
+        default=None, ge=1, description="1-indexed start line if known."
+    )
+    end_line: int | None = Field(
+        default=None, ge=1, description="1-indexed end line if known."
+    )
+    reason: str = Field(
+        ...,
+        description="Human/selection reason this fragment was included (provenance).",
+    )
+
+
+class TaskContext(BaseModel):
+    """Task-scoped context for one attempt of a Child Task (T15).
+
+    The Context Builder assembles exactly what the model needs for THIS task:
+    objective, acceptance criteria, constraints, allowed files/tools, relevant
+    sources/tests/decisions, prior observations/verification, and a context
+    budget. The context is bounded and provenance-tracked; no file outside the
+    approved scope and no whole-repo dump is included without a justified need.
+    The model may do additional allowed reads through the Broker at run time.
+
+    TaskContext is a projection: it is not a second authority, holds no
+    transition/PASS power, and does not widen the approved scope.
+    """
+
+    run_id: str = Field(..., description="The run this context belongs to.")
+    task_id: str = Field(..., description="The task this context is for.")
+    attempt: int = Field(
+        ..., ge=1, description="The attempt this context is built for (1-indexed)."
+    )
+    objective: str = Field(
+        ..., min_length=1, description="The task objective (title + description)."
+    )
+    acceptance_criteria: list[str] = Field(
+        default_factory=list,
+        description="Acceptance criteria / verification spec for this task.",
+    )
+    constraints: list[str] = Field(
+        default_factory=list, description="Task and run constraints that apply."
+    )
+    allowed_files: list[str] = Field(
+        default_factory=list,
+        description="Files this task is approved to read/modify (scope boundary).",
+    )
+    allowed_tools: list[str] = Field(
+        default_factory=list, description="Tool kinds this task may invoke."
+    )
+    fragments: list[ContextFragment] = Field(
+        default_factory=list,
+        description="Provenance-tracked source fragments selected for this task.",
+    )
+    prior_observations: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Summary of prior tool observations on previous attempts of this task "
+            "(feedback for retry)."
+        ),
+    )
+    prior_verification: str = Field(
+        default="",
+        description=(
+            "Summary of the prior attempt's verification failure (retry feedback)."
+        ),
+    )
+    context_budget_chars: int = Field(
+        default=8192,
+        ge=1,
+        description="Soft character budget for the assembled context.",
+    )
+    used_chars: int = Field(
+        default=0, ge=0, description="Characters used by the assembled fragments."
+    )
+
+
 class RunState(BaseModel):
     """The complete authoritative state of an FS-ASM run (v1 snapshot).
 
