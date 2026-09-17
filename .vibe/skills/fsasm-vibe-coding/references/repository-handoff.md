@@ -1,6 +1,6 @@
 # FS-ASM — repository handoff / jeden bieżący punkt statusowy
 
-**Aktualizacja dokumentacji:** 17.09.2026. **Punkt odniesienia przy przygotowaniu:** `Fsasm-experimental` @ `6bf60dbdecf0a2b14926b05891a093cdcd6e1ec1`. Po scaleniu PR aktualizuj ten plik faktami ze sprawdzonego Git, nie na podstawie opisów modelu. Każda sesja weryfikuje żywy HEAD, PR i CI.
+**Aktualizacja dokumentacji:** 17.09.2026. **Zweryfikowany punkt odniesienia:** `Fsasm-experimental` @ `3f1c12f04538ecf77fc729f86919eb0a83d21214` (merge PR #21). To datowany snapshot, nie gwarancja aktualnego HEAD. Każda kolejna sesja weryfikuje żywy HEAD, PR i CI przed rozpoczęciem zadania.
 
 ## Cel i uprawnienia
 
@@ -8,14 +8,17 @@
 
 ## Potwierdzone na wskazanym punkcie odniesienia
 
-- [PR #20](https://github.com/bmateuszideas/fsasm-training-lab/pull/20) został scalony 17.09.2026; merge SHA `f600ed210501030398740ce87006364dd78a034f`. Następnie przygotowano dokumentację v1 w `6bf60db`. Przed nowym zadaniem ponownie sprawdź HEAD.
-- M1–M3 historycznie CLOSED. M4 jest demonstratorem z retry i Human Gate, ale **OPEN**; merge PR #20 sam go nie zamyka. M5 **NOT STARTED**. LLMC/fine-tuning odłożone.
+- [PR #20](https://github.com/bmateuszideas/fsasm-training-lab/pull/20) został scalony 17.09.2026; merge SHA `f600ed210501030398740ce87006364dd78a034f`. Następnie przygotowano dokumentację v1 w `6bf60db`.
+- [PR #21](https://github.com/bmateuszideas/fsasm-training-lab/pull/21) został scalony do `Fsasm-experimental` 17.09.2026; merge SHA `3f1c12f04538ecf77fc729f86919eb0a83d21214`. Konsolidacja dokumentacji i pojedynczy handoff repozytorium są już w linii integracyjnej, a nie zadaniem oczekującym na PR/merge. CI dla head PR #21 (`31d121f3b3e30cca99c3fb876137a5f8a8313730`) zakończyło się sukcesem; nie jest to wynik testów ponownie wykonanych na merge SHA.
+- M1–M3 historycznie CLOSED. M4 jest demonstratorem z retry i Human Gate, ale **OPEN**; scalenie PR #20 ani PR #21 go nie zamyka. M5 **NOT STARTED**. LLMC/fine-tuning odłożone.
 - M4 wykonuje tylko `TASK-001` przez deterministyczny stub. Nie ma kompletnego schedulera, Tool Brokera, niezależnego Verifiera artefaktów, realnej pętli model–narzędzie–obserwacja, Gatewaya ani pełnego operacyjnego resume.
-- Audyt Astry przebadał kandydata `142db38`, wskazując G3–G5 (tożsamość bramki i audyt sygnałów) oraz szersze luki G1/G2 (revision i niezależne evidence). [Pełny datowany raport](../../../../fsasm-first/docs/reviews/FSASM_V1_ARCHITECTURE_GAP_ANALYSIS_AND_MIGRATION_PLAN_2026-09-17.md). Wyniki 625 passed / 3 skipped odnoszą się do tego kandydata, nie do dowolnego przyszłego HEAD.
+- Audyt Astry przebadał kandydata `142db38`, wskazując G3–G5 (tożsamość bramki i audyt sygnałów) oraz szersze luki G1/G2 (revision i niezależne evidence). [Pełny datowany raport](../../../../fsasm-first/docs/reviews/FSASM_V1_ARCHITECTURE_GAP_ANALYSIS_AND_MIGRATION_PLAN_2026-09-17.md). Wyniki 625 passed / 3 skipped odnoszą się do tego kandydata, nie do dowolnego przyszłego HEAD. Status G3–G5 na HEAD po merge PR #20 nie został jeszcze niezależnie potwierdzony.
 
 ## Jedyny bieżący krok i status decyzji
 
-**Bieżące zadanie:** konsolidacja dokumentacji i ustanowienie tego handoffu w `.vibe/skills/fsasm-vibe-coding/references/`, bez zmian `src/`, testów lub kanonu. Przygotować PR do `Fsasm-experimental`, sprawdzić usunięcie duplikatów i odsyłacze; nie scalać samodzielnie. Po zewnętrznym review i merge: oddzielnie zweryfikować G3–G5 na nowym HEAD i uzyskać decyzję użytkownika w sprawie sygnałów legacy bez `gate_id` przed wydaniem tasku kodowego.
+**Następny krok: niezależna weryfikacja G3–G5 na aktualnym `Fsasm-experimental`.** Najpierw sprawdź nowy HEAD i CI, odtwórz trzy przypadki Human Gate opisane w audycie Astry na rzeczywistym aktualnym kodzie i testach oraz zapisz dla każdego wynik, reprodukcję i SHA. Nie zakładaj ani naprawienia G3–G5 przez PR #20, ani ich dalszego występowania bez reprodukcji. To krok weryfikacyjny, nie automatyczne zlecenie zmian kodu ani zgoda na zamknięcie M4.
+
+**Nierozstrzygnięta decyzja użytkownika:** czy nadal dopuszczać sygnały legacy Human Gate bez jawnego `gate_id`. Przed taskiem kodowym zmieniającym tę semantykę uzyskaj osobną decyzję użytkownika, korzystając z ustaleń reprodukcji. Nie rozpoczynaj M5 ani innych pozycji backlogu bez odrębnej zgody.
 
 [Backlog migracji](../../../../fsasm-first/docs/MIGRATION_BACKLOG_V1.md) jest propozycją, nie automatycznym upoważnieniem do realizacji Q1–Q11. G3–G5 to reprodukcje komponentowe, nie dowód produkcyjnego przejęcia ani automatycznie zamknięte defekty.
 
