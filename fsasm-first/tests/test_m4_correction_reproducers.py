@@ -31,6 +31,7 @@ from fsasm.persistence import RuntimePersistence
 from src.workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
     HumanDecisionSignal,
+    OpenGate,
     _gate_id,
 )
 
@@ -94,6 +95,15 @@ def _make_plan(run_id, goal="g"):
     )
 
 
+def _make_state(run_id, plan, status=RunStatus.NEEDS_HUMAN):
+    return RunState(
+        run_id=run_id,
+        goal=plan.goal,
+        status=status,
+        plan=plan,
+    )
+
+
 class TestBlocker1FutureGatePreAuthorization:
     """BLOCKER 1: a supplied future gate_id must be rejected, not buffered for
     later automatic consumption."""
@@ -102,7 +112,11 @@ class TestBlocker1FutureGatePreAuthorization:
     async def test_future_gate_signal_rejected_not_buffered(self):
         wf = FsasmMilestoneFourWorkflow()
         # The workflow is currently waiting on gate 1.
-        wf.current_gate_id = _gate_id("run-b1", "TASK-001", 1)
+        gate = _gate_id("run-b1", "TASK-001", 1)
+        wf.current_gate_id = gate
+        wf.current_gate = OpenGate(
+            run_id="run-b1", task_id="TASK-001", gate_id=gate, attempt=1
+        )
 
         future_gate = _gate_id("run-b1", "TASK-001", 2)
         # A decision explicitly targeting the FUTURE gate 2 must be rejected,
@@ -121,12 +135,16 @@ class TestBlocker1FutureGatePreAuthorization:
             "be consumed automatically when gate 2 later opens "
             "(pre-authorization)."
         )
-        assert any(r["reason"] == "wrong_gate" for r in wf.rejected_signals)
+        assert any(r["reason"] == "wrong_gate" for r in wf.pending_rejections)
 
     @pytest.mark.asyncio
     async def test_wrong_run_signal_rejected_not_terminating(self):
         wf = FsasmMilestoneFourWorkflow()
-        wf.current_gate_id = _gate_id("run-b1", "TASK-001", 1)
+        gate2 = _gate_id("run-b1", "TASK-001", 1)
+        wf.current_gate_id = gate2
+        wf.current_gate = OpenGate(
+            run_id="run-b1", task_id="TASK-001", gate_id=gate2, attempt=1
+        )
 
         # A signal for a different run must be rejected (wrong-run) and must
         # not terminate the workflow (no exception raised).
@@ -140,7 +158,7 @@ class TestBlocker1FutureGatePreAuthorization:
         )
         # No exception (workflow not terminated); signal rejected.
         assert len(wf.accepted_decisions) == 0
-        assert any(r["reason"] == "wrong_gate" for r in wf.rejected_signals)
+        assert any(r["reason"] == "wrong_gate" for r in wf.pending_rejections)
 
 
 class TestBlocker2EarlyLegacySignalLoss:
@@ -164,7 +182,11 @@ class TestBlocker2EarlyLegacySignalLoss:
         wf = FsasmMilestoneFourWorkflow()
         # The fixed workflow registers current_gate_id BEFORE persistence, so
         # the gate is open when a signal can legally arrive.
-        wf.current_gate_id = _gate_id("run-b2", "TASK-001", 1)
+        gate3 = _gate_id("run-b2", "TASK-001", 1)
+        wf.current_gate_id = gate3
+        wf.current_gate = OpenGate(
+            run_id="run-b2", task_id="TASK-001", gate_id=gate3, attempt=1
+        )
 
         # A valid legacy signal arrives (task_id + action, no gate_id).
         await wf.receive_human_decision(
@@ -175,11 +197,11 @@ class TestBlocker2EarlyLegacySignalLoss:
         )
 
         # The signal must NOT have been lost: it is accepted for the open gate.
-        assert wf.current_gate_id in wf.accepted_decisions
-        accepted = wf.accepted_decisions[wf.current_gate_id]
+        assert gate3 in wf.accepted_decisions
+        accepted = wf.accepted_decisions[gate3]
         assert accepted.action == HumanDecisionAction.RETRY_ONCE
         # No no_open_gate rejection.
-        assert not any(r["reason"] == "no_open_gate" for r in wf.rejected_signals)
+        assert not any(r["reason"] == "no_open_gate" for r in wf.pending_rejections)
 
     @pytest.mark.asyncio
     async def test_legacy_signal_before_any_gate_rejected_not_lost_silently(self):
@@ -198,23 +220,83 @@ class TestBlocker2EarlyLegacySignalLoss:
             )
         )
         # Explicitly rejected (auditable), not silently buffered.
-        assert any(r["reason"] == "no_open_gate" for r in wf.rejected_signals)
+        assert any(r["reason"] == "no_open_gate" for r in wf.pending_rejections)
         assert len(wf.accepted_decisions) == 0
 
 
 class TestBlocker3PrematureAppliedMarking:
     """BLOCKER 3: applied_decision_ids must be marked AFTER successful
-    application, not before the activity call."""
+    application, not before the activity call.
 
-    def test_applied_marking_after_success_only(self):
-        """If the activity raises, the decision_id must NOT be in
-        applied_decision_ids. We verify the contract via a direct simulation
-        of the consumption logic by inspecting the workflow code's ordering
-        is not testable in isolation; instead we assert the documented
-        invariant: a rejected (wrong task) decision is not marked applied."""
+    The worker-level boundary is proven in ``test_m4_correction2_worker.py``
+    (``TestT08AppliedMarkingAfterSuccessOnly``) by injecting a real write
+    failure inside the application activity. This domain-level test proves the
+    same invariant directly: when ``validate_and_apply_human_decision_activity``
+    raises (injected audit-evidence write failure), the decision_id is NOT in
+    ``applied_decision_ids`` because the workflow only marks applied AFTER the
+    activity returns successfully. The failure is a REAL injected write failure,
+    not a mere assertion of an empty set on a fresh workflow."""
+
+    def test_activity_failure_leaves_decision_unmarked(
+        self, tmp_persistence, monkeypatch
+    ):
+        from fsasm.errors import PersistenceError
+        from src.workflows.fsasm_milestone_four import (
+            validate_and_apply_human_decision_activity,
+            _decision_id,
+        )
+        from fsasm.models import HumanDecision
+
+        p = tmp_persistence
+        run_id = "run-b3-mark"
+        p.create_run(run_id)
+        task = _make_task(attempt=1, max_attempts=1, status=TaskStatus.NEEDS_HUMAN)
+        plan = _make_plan(run_id)
+        state = _make_state(run_id, plan, status=RunStatus.NEEDS_HUMAN)
+        p.save_run_state(state)
+
+        decision = HumanDecision(
+            task_id="TASK-001",
+            action=HumanDecisionAction.RETRY_ONCE,
+            reason="retry",
+        )
+        gate = _gate_id(run_id, "TASK-001", 1)
+        decision_id = _decision_id(
+            run_id, "TASK-001", gate, HumanDecisionAction.RETRY_ONCE
+        )
+
+        orig_save_evidence = RuntimePersistence.save_evidence
+
+        def failing_save_evidence(self, evidence):
+            if evidence.kind == "human_gate_audit":
+                raise PersistenceError("injected audit evidence write failure")
+            return orig_save_evidence(self, evidence)
+
+        monkeypatch.setattr(RuntimePersistence, "save_evidence", failing_save_evidence)
+        with pytest.raises(PersistenceError):
+            import asyncio
+
+            asyncio.run(
+                validate_and_apply_human_decision_activity(
+                    decision, task, state, gate_id=gate, decision_id=decision_id
+                )
+            )
+        monkeypatch.undo()
+
         wf = FsasmMilestoneFourWorkflow()
-        # No applied ids for a decision that was never successfully applied.
-        assert "decision-never-applied" not in wf.applied_decision_ids
+        assert decision_id not in wf.applied_decision_ids, (
+            "Pre-fix defect: the decision_id would be marked applied before "
+            "the activity returned. With the fix, the workflow marks "
+            "applied_decision_ids ONLY after the activity succeeds, so a "
+            "failed application leaves the decision unmarked."
+        )
+        gate_audits = [
+            e for e in p.load_all_evidence(run_id) if e.kind == "human_gate_audit"
+        ]
+        assert len(gate_audits) == 0, (
+            "The audit evidence write failed, so no human_gate_audit record "
+            "must be durably persisted."
+        )
 
 
 class TestBlocker4LoadPlanConsistency:

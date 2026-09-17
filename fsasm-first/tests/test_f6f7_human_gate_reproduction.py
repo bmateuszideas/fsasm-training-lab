@@ -41,6 +41,7 @@ from fsasm.models import (
 from src.workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
     HumanDecisionSignal,
+    OpenGate,
     validate_and_apply_human_decision_activity,
 )
 
@@ -123,7 +124,11 @@ class TestF6F7ReproductionConflictingSignals:
         decision and rejects the conflicting overwrite (first-wins)."""
         wf = FsasmMilestoneFourWorkflow()
         # Open a gate so the signal can be bound to a gate occurrence.
-        wf.current_gate_id = "gate-run-gate-001-TASK-001-attempt-1"
+        gate = "gate-run-gate-001-TASK-001-attempt-1"
+        wf.current_gate_id = gate
+        wf.current_gate = OpenGate(
+            run_id="run-gate-001", task_id="TASK-001", gate_id=gate, attempt=1
+        )
 
         # Send ABORT first.
         await wf.receive_human_decision(
@@ -138,8 +143,8 @@ class TestF6F7ReproductionConflictingSignals:
 
         # The first accepted decision (ABORT) must be preserved; the
         # conflicting RETRY_ONCE must be rejected without overwriting it.
-        assert wf.current_gate_id in wf.accepted_decisions
-        accepted = wf.accepted_decisions[wf.current_gate_id]
+        assert gate in wf.accepted_decisions
+        accepted = wf.accepted_decisions[gate]
         assert accepted.action == HumanDecisionAction.ABORT, (
             "Pre-fix defect reproduced: the later RETRY_ONCE signal overwrote the "
             "earlier ABORT signal in the single pending-decision slot."
@@ -148,7 +153,7 @@ class TestF6F7ReproductionConflictingSignals:
         assert any(
             r["reason"] == "conflicting_signal_rejected_first_wins"
             and r["rejected_action"] == "RETRY_ONCE"
-            for r in wf.rejected_signals
+            for r in wf.pending_rejections
         )
 
 

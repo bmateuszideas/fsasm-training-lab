@@ -12,6 +12,7 @@ IMPLEMENTS:
 """
 
 import logging
+from enum import Enum
 from typing import Any
 
 import mistralai.workflows as workflows
@@ -82,6 +83,56 @@ def _decision_id(
 ) -> str:
     """Deterministic logical-decision identifier."""
     return f"decision-{run_id}-{task_id}-{gate_id}-{action.value}"
+
+
+# =============================================================================
+# F6/F7 OPEN-GATE IDENTITY CONTRACT (T04)
+# =============================================================================
+#
+# A Human Decision can be accepted ONLY for the currently open gate, and only
+# when its run, task and gate identities match EXACTLY. The open gate is
+# represented by a typed ``OpenGate`` structure so the signal handler never
+# infers run/task identity by substring matching against a concatenated
+# gate-id string. Deterministic identifiers are generated only from
+# run_id/task_id/attempt; no random identifiers or wall-clock values are used
+# inside deterministic workflow control flow.
+
+
+class GateLifecycle(str, Enum):
+    """Lifecycle states of a Human Gate occurrence.
+
+    IDENTITY_REGISTERED -> NEEDS_HUMAN_PERSISTED -> WAITING ->
+    DECISION_ACCEPTED -> DECISION_APPLIED -> GATE_CLOSED.
+
+    Registering the gate identity before NEEDS_HUMAN is durably persisted
+    eliminates the signal-loss interval: a valid signal arriving after
+    persistence but before the wait is retained for the correct gate, but it
+    is NOT applied before the activity has successfully persisted
+    NEEDS_HUMAN. If persistence fails, no pending signal may authorize
+    execution through an uncommitted gate.
+    """
+
+    IDENTITY_REGISTERED = "identity_registered"
+    NEEDS_HUMAN_PERSISTED = "needs_human_persisted"
+    WAITING = "waiting"
+    DECISION_ACCEPTED = "decision_accepted"
+    DECISION_APPLIED = "decision_applied"
+    GATE_CLOSED = "gate_closed"
+
+
+class OpenGate(BaseModel):
+    """Exact identity of the currently open Human Gate.
+
+    Provides exact access to run_id, task_id, gate_id and attempt so the
+    signal handler compares incoming identities with equality, never by
+    substring membership in a serialized gate-id string.
+    """
+
+    run_id: str
+    task_id: str
+    gate_id: str
+    attempt: int
+    lifecycle: GateLifecycle = GateLifecycle.IDENTITY_REGISTERED
 
 
 # =============================================================================
@@ -1056,12 +1107,17 @@ async def persist_human_gate_rejections_activity(
     """Persist auditable records of rejected Human Gate signals.
 
     Signal handlers must not perform filesystem I/O, so rejected signals are
-    collected in workflow-local ``rejected_signals`` and durably logged here
-    (an activity) when the gate is consumed. This gives an auditable, durable
-    record explaining why a signal was rejected (wrong_gate, wrong_run,
-    conflicting first-wins, contradictory decision_id reuse, no_open_gate).
-    Rejection of an invalid signal does not terminate or authorize the
-    workflow; it is recorded for explanation only.
+    collected in the workflow-local ``pending_rejections`` buffer and durably
+    drained here (an activity) by the event-driven wait loop that reacts to BOTH
+    an accepted decision AND unaudited rejections. This means a run waiting
+    indefinitely after only invalid signals STILL produces a durable rejection
+    record; rejections are never held only in memory pending a valid decision.
+    A monotonic ``flushed_rejections`` cursor advances so a gate-1 rejection
+    is never re-flushed or misattributed to gate 2. This gives an auditable,
+    durable record explaining why a signal was rejected (wrong_gate, wrong_run,
+    wrong_task, conflicting first-wins, contradictory decision_id reuse,
+    no_open_gate). Rejection of an invalid signal does not terminate or
+    authorize the workflow; it is recorded for explanation only.
     """
     if not rejected_signals:
         return
@@ -1175,12 +1231,22 @@ class FsasmMilestoneFourWorkflow:
         #   * applied_decision_ids: set of decision_ids already applied (idempotent
         #     application; a duplicate delivery is a no-op, not a second
         #     transition);
-        #   * rejected_signals: audit record of rejected signals and why.
+        #   * pending_rejections: per-gate rejection records not yet durably
+        #     flushed. Each entry carries its originating gate_id (or None for
+        #     signals received while no gate is open) so a rejection belonging
+        #     to gate 1 is never misattributed to gate 2. flushed_count tracks
+        #     the number of entries already durably persisted so the draining
+        #     loop advances a monotonically increasing cursor (no duplication).
         self.accepted_decisions: dict[str, HumanDecision] = {}
         self.applied_decision_ids: set[str] = set()
-        self.rejected_signals: list[dict[str, Any]] = []
-        # The current gate being waited on (set before wait_condition). Signals
-        # for other gates are buffered (not silently applied to the wrong gate).
+        self.pending_rejections: list[dict[str, Any]] = []
+        self.flushed_rejections: int = 0
+        # T04: the exact identity of the currently open gate. The signal
+        # handler compares incoming run_id/task_id/gate_id with EQUALITY
+        # against this structure, never by substring matching against the
+        # serialized gate-id string.
+        self.current_gate: OpenGate | None = None
+        # The current gate_id being waited on (set before wait_condition).
         self.current_gate_id: str | None = None
 
     @workflows.workflow.signal(
@@ -1194,25 +1260,27 @@ class FsasmMilestoneFourWorkflow:
         Signal handlers must only mutate deterministic workflow-local data.
         No filesystem I/O in signal handlers.
 
-        F6/F7 identity-aware handling (first accepted decision wins):
-        - An explicit ``gate_id`` must match the currently open gate
-          (``self.current_gate_id``). A signal for any other gate — future,
-          closed, wrong-task or wrong-run — is rejected as ``wrong_gate`` and
-          recorded, WITHOUT terminating or authorizing the workflow. This
-          prevents pre-authorization of an unopened future gate.
-        - A signal with no explicit ``gate_id`` is bound to the currently open
-          gate (the legacy contract). Because the workflow registers
-          ``current_gate_id`` BEFORE the NEEDS_HUMAN state is durably
-          persisted, a valid early legacy signal arriving in the
-          post-persist/pre-wait interval is preserved (never lost as
-          ``no_open_gate``).
-        - ``run_id`` (when supplied) must match the run the gate belongs to; a
+        F6/F7 identity-aware handling (first VALID accepted decision wins):
+        - An explicit ``gate_id`` must match the currently open gate. A signal
+          for any other gate — future, closed, wrong-task or wrong-run — is
+          rejected as ``wrong_gate`` and recorded, WITHOUT terminating or
+          authorizing the workflow.
+        - ``task_id`` must EXACTLY match the task belonging to the open gate
+          (``current_gate.task_id``). A wrong-task signal is rejected as
+          ``wrong_task`` BEFORE it can occupy the first-wins slot (BLOCKER A).
+        - ``run_id`` (when supplied) must EXACTLY match the run the gate
+          belongs to (``current_gate.run_id``), compared by equality — NOT by
+          substring membership in the serialized gate-id (BLOCKER B). A
           wrong-run signal is rejected as ``wrong_run``.
-        - If a decision is already accepted for this gate, a conflicting
-          signal is rejected without overwriting the accepted one. A repeated
-          identical signal is a no-op duplicate acknowledgement.
-        - Reusing the same ``decision_id`` with contradictory contents is
-          rejected.
+        - An INVALID signal never reserves the gate: only the first VALID
+          decision is accepted. A conflicting later signal is rejected without
+          overwriting the accepted one; a repeated identical signal is a
+          no-op duplicate acknowledgement.
+        - Reusing the same ``decision_id`` with a contradictory payload
+          (task_id, action, gate_id OR reason) is rejected.
+        - Rejections are appended to ``pending_rejections`` (each tagged with
+          its originating gate_id) and durably drained by the wait loop via an
+          activity — even if no valid decision ever arrives (BLOCKER C).
         """
         decision = HumanDecision(
             task_id=signal_data.task_id,
@@ -1224,73 +1292,73 @@ class FsasmMilestoneFourWorkflow:
 
         gate_id = decision.gate_id
         decision_id = decision.decision_id
+        gate_tag = self.current_gate_id if self.current_gate_id is not None else None
 
-        # F6/F7 BLOCKER 1: an explicit gate_id must match the currently open
-        # gate. A decision for an unopened future gate, a closed gate, a
-        # wrong-task gate or a wrong-run gate is rejected as ``wrong_gate`` and
-        # recorded, never buffered for later automatic consumption. This is
-        # the gate-identity boundary: the workflow consumes only the decision
-        # bound to ``current_gate_id``.
-        if gate_id is not None:
-            if self.current_gate_id is None:
-                self.rejected_signals.append(
-                    {
-                        "reason": "wrong_gate",
-                        "gate_id": gate_id,
-                        "current_gate_id": None,
-                        "task_id": decision.task_id,
-                        "action": decision.action.value,
-                    }
-                )
-                return
-            if gate_id != self.current_gate_id:
-                self.rejected_signals.append(
-                    {
-                        "reason": "wrong_gate",
-                        "gate_id": gate_id,
-                        "current_gate_id": self.current_gate_id,
-                        "task_id": decision.task_id,
-                        "action": decision.action.value,
-                    }
-                )
-                return
-
-        # F6/F7: validate run_id when supplied. The open gate belongs to one
-        # run; a decision for another run is rejected as ``wrong_run``.
-        if signal_data.run_id is not None and self.current_gate_id is not None:
-            # The current gate_id encodes the run_id. Reject a wrong-run
-            # signal explicitly so it cannot authorize the open gate.
-            if signal_data.run_id not in self.current_gate_id:
-                self.rejected_signals.append(
-                    {
-                        "reason": "wrong_run",
-                        "gate_id": gate_id,
-                        "current_gate_id": self.current_gate_id,
-                        "task_id": decision.task_id,
-                        "action": decision.action.value,
-                    }
-                )
-                return
-
-        # The effective gate is the open gate. With BLOCKER 2 fixed,
-        # ``current_gate_id`` is registered before NEEDS_HUMAN is durably
-        # persisted, so a valid legacy signal (no explicit gate_id) arriving in
-        # the post-persist/pre-wait interval binds to the open gate and is
-        # preserved (never lost).
-        effective_gate_id = self.current_gate_id
-        if effective_gate_id is None:
-            self.rejected_signals.append(
+        # No open gate: reject every signal as no_open_gate (recorded with the
+        # current gate tag, None). A signal before the first gate or after the
+        # last gate is explicitly rejected, never silently buffered for a
+        # future gate.
+        if self.current_gate is None:
+            self.pending_rejections.append(
                 {
                     "reason": "no_open_gate",
+                    "gate_id": gate_tag,
                     "task_id": decision.task_id,
                     "action": decision.action.value,
                 }
             )
             return
 
+        cg = self.current_gate
+
+        # BLOCKER 1: an explicit gate_id must match the currently open gate.
+        if gate_id is not None and gate_id != cg.gate_id:
+            self.pending_rejections.append(
+                {
+                    "reason": "wrong_gate",
+                    "gate_id": gate_id,
+                    "current_gate_id": cg.gate_id,
+                    "task_id": decision.task_id,
+                    "action": decision.action.value,
+                }
+            )
+            return
+
+        # BLOCKER A: exact task_id comparison BEFORE accepting. A wrong-task
+        # signal must not occupy the first-wins slot.
+        if decision.task_id != cg.task_id:
+            self.pending_rejections.append(
+                {
+                    "reason": "wrong_task",
+                    "gate_id": cg.gate_id,
+                    "current_task_id": cg.task_id,
+                    "task_id": decision.task_id,
+                    "action": decision.action.value,
+                }
+            )
+            return
+
+        # BLOCKER B: exact run_id comparison (equality, not substring). A
+        # wrong-run signal must not occupy the first-wins slot.
+        if signal_data.run_id is not None and signal_data.run_id != cg.run_id:
+            self.pending_rejections.append(
+                {
+                    "reason": "wrong_run",
+                    "gate_id": cg.gate_id,
+                    "current_run_id": cg.run_id,
+                    "run_id": signal_data.run_id,
+                    "task_id": decision.task_id,
+                    "action": decision.action.value,
+                }
+            )
+            return
+
+        effective_gate_id = cg.gate_id
+
         # Detect contradictory reuse of the same decision_id: if this
-        # decision_id was already accepted but with a different payload, reject
-        # it without overwriting the accepted one.
+        # decision_id was already accepted but with a different payload (task,
+        # action, gate OR reason), reject it without overwriting the accepted
+        # one. Two payloads differing only by reason are NOT identical.
         existing_for_id = None
         for existing in self.accepted_decisions.values():
             if existing.decision_id == decision_id and decision_id is not None:
@@ -1301,8 +1369,9 @@ class FsasmMilestoneFourWorkflow:
                 existing_for_id.task_id != decision.task_id
                 or existing_for_id.action != decision.action
                 or existing_for_id.gate_id != effective_gate_id
+                or existing_for_id.reason != decision.reason
             ):
-                self.rejected_signals.append(
+                self.pending_rejections.append(
                     {
                         "reason": "contradictory_decision_id_reuse",
                         "decision_id": decision_id,
@@ -1315,8 +1384,8 @@ class FsasmMilestoneFourWorkflow:
             # acknowledgement (idempotent delivery).
             return
 
-        # First accepted decision wins for the open gate. If a decision is
-        # already accepted for this gate, a conflicting signal is rejected
+        # First accepted VALID decision wins for the open gate. If a decision
+        # is already accepted for this gate, a conflicting signal is rejected
         # without overwriting it.
         if effective_gate_id in self.accepted_decisions:
             existing = self.accepted_decisions[effective_gate_id]
@@ -1324,7 +1393,7 @@ class FsasmMilestoneFourWorkflow:
                 existing.decision_id != decision_id
                 or existing.action != decision.action
             ):
-                self.rejected_signals.append(
+                self.pending_rejections.append(
                     {
                         "reason": "conflicting_signal_rejected_first_wins",
                         "gate_id": effective_gate_id,
@@ -1336,8 +1405,8 @@ class FsasmMilestoneFourWorkflow:
             # Identical duplicate for the same gate: no-op.
             return
 
-        # Accept the decision, keyed by the open gate so it is applied only to
-        # the correct gate occurrence.
+        # Accept the VALID decision, keyed by the open gate so it is applied
+        # only to the correct gate occurrence.
         decision.gate_id = effective_gate_id
         self.accepted_decisions[effective_gate_id] = decision
 
@@ -1476,13 +1545,19 @@ class FsasmMilestoneFourWorkflow:
                         # the NEEDS_HUMAN state is durably persisted. The gate_id
                         # derives from run_id/task_id/attempt, all known before the
                         # transition (transition_to_needs_human_activity does not
-                        # change attempt). Registering current_gate_id first
+                        # change attempt). Registering the open-gate identity first
                         # eliminates the signal-loss interval: a valid legacy
                         # signal (no explicit gate_id) arriving after NEEDS_HUMAN
                         # is persisted but before wait_condition is bound to this
                         # gate and preserved, never lost as no_open_gate.
                         gate_id = _gate_id(state.run_id, task.task_id, task.attempt)
                         self.current_gate_id = gate_id
+                        self.current_gate = OpenGate(
+                            run_id=state.run_id,
+                            task_id=task.task_id,
+                            gate_id=gate_id,
+                            attempt=task.attempt,
+                        )
 
                         # Transition to NEEDS_HUMAN (both task AND run)
                         # BEFORE waiting, filesystem MUST durably contain NEEDS_HUMAN state
@@ -1492,28 +1567,55 @@ class FsasmMilestoneFourWorkflow:
                         needs_human_task_ids.append(task.task_id)
                         # DO NOT add to completed_task_ids - NEEDS_HUMAN is NOT completed
                         plan = state.plan if state.plan is not None else plan
+                        # NEEDS_HUMAN is now durably persisted.
+                        self.current_gate.lifecycle = (
+                            GateLifecycle.NEEDS_HUMAN_PERSISTED
+                        )
 
-                        # Wait for human decision signal. A signal may legally
-                        # arrive after NEEDS_HUMAN was durably persisted but before
-                        # workflow code reaches the wait; because current_gate_id
-                        # was registered before persistence, such a signal is
-                        # preserved.
-                        def _gate_has_decision(gid: str = gate_id) -> bool:
-                            return gid in self.accepted_decisions
-
-                        await workflows.workflow.wait_condition(_gate_has_decision)
-
-                        # F6/F7: durably persist any rejected signals collected
-                        # for this gate so there is an auditable record explaining
-                        # why signals were rejected (wrong_gate, wrong_run,
-                        # conflicting first-wins, ...). This is an activity (no FS
-                        # I/O in signal handlers). Take a snapshot of the
-                        # rejections recorded so far for this gate occurrence.
-                        gate_rejections = list(self.rejected_signals)
-                        if gate_rejections:
-                            await persist_human_gate_rejections_activity(
-                                state.run_id, task.task_id, gate_id, gate_rejections
+                        # T05 (BLOCKER C): event-driven wait loop that reacts to BOTH
+                        # a newly accepted valid decision AND pending unaudited
+                        # rejection records. Rejections are durably flushed via an
+                        # activity even if no valid decision ever arrives, so a
+                        # run waiting indefinitely after an invalid signal still
+                        # produces a durable rejection record. The cursor
+                        # (flushed_rejections) advances monotonically, so a
+                        # rejection belonging to gate 1 is never re-flushed under
+                        # gate 2. The per-entry gate tag is fixed at signal time so
+                        # a gate-1 rejection is never misattributed to gate 2.
+                        self.current_gate.lifecycle = GateLifecycle.WAITING
+                        while True:
+                            # Drain rejections not yet durably persisted.
+                            if self.flushed_rejections < len(self.pending_rejections):
+                                to_flush = self.pending_rejections[
+                                    self.flushed_rejections :
+                                ]
+                                await persist_human_gate_rejections_activity(
+                                    state.run_id, task.task_id, gate_id, to_flush
+                                )
+                                self.flushed_rejections = len(self.pending_rejections)
+                                continue
+                            # A valid decision for this gate releases the wait.
+                            if gate_id in self.accepted_decisions:
+                                break
+                            await workflows.workflow.wait_condition(
+                                lambda: (
+                                    gate_id in self.accepted_decisions
+                                    or self.flushed_rejections
+                                    < len(self.pending_rejections)
+                                )
                             )
+
+                        # Flush any remaining rejections recorded before the
+                        # accepted decision so the audit is complete before the
+                        # transition is applied.
+                        if self.flushed_rejections < len(self.pending_rejections):
+                            to_flush = self.pending_rejections[
+                                self.flushed_rejections :
+                            ]
+                            await persist_human_gate_rejections_activity(
+                                state.run_id, task.task_id, gate_id, to_flush
+                            )
+                            self.flushed_rejections = len(self.pending_rejections)
 
                         # Consume the accepted decision for this gate.
                         decision = self.accepted_decisions[gate_id]
@@ -1522,6 +1624,7 @@ class FsasmMilestoneFourWorkflow:
                         )
                         already_applied = applied_id in self.applied_decision_ids
 
+                        self.current_gate.lifecycle = GateLifecycle.DECISION_ACCEPTED
                         if not already_applied and decision is not None:
                             # Validate and apply human decision through domain/activity code.
                             # Pass gate_id/decision_id so the activity binds the audit
@@ -1546,6 +1649,20 @@ class FsasmMilestoneFourWorkflow:
                             self.applied_decision_ids.add(applied_id)
                             plan = state.plan if state.plan is not None else plan
                             final_human_decision = applied_decision
+                            self.current_gate.lifecycle = GateLifecycle.DECISION_APPLIED
+
+                            # T06: close the gate. Invalidate the open-gate
+                            # identity so a later signal (stale gate, future gate,
+                            # wrong task/run) is rejected against a closed gate
+                            # and cannot authorize a later gate occurrence. The
+                            # accepted-decision entry is removed from the live
+                            # map (it is durably recorded in evidence); a duplicate
+                            # delivery of the same decision_id is caught by
+                            # applied_decision_ids (idempotent).
+                            self.current_gate.lifecycle = GateLifecycle.GATE_CLOSED
+                            self.current_gate = None
+                            self.current_gate_id = None
+                            self.accepted_decisions.pop(gate_id, None)
 
                             if decision.action == HumanDecisionAction.ABORT:
                                 # ABORT: task FAILED, run FAILED, active_task_id = None
@@ -1569,6 +1686,9 @@ class FsasmMilestoneFourWorkflow:
                             # gate state (the task is READY from the first application).
                             # This branch cannot normally run here because the gate is
                             # consumed once, but it documents exactly-once application.
+                            self.current_gate = None
+                            self.current_gate_id = None
+                            self.accepted_decisions.pop(gate_id, None)
                             break
 
         # Step 7: Persist final state
