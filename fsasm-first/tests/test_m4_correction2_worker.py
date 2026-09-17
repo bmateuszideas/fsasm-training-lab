@@ -51,6 +51,7 @@ from src.workflows.fsasm_milestone_four import (
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     validate_config_activity,
+    _decision_id,
     _gate_id,
 )
 from fsasm.planner_activities import plan_activity
@@ -179,8 +180,16 @@ class TestW10EarlySignalControlledBarrier:
                     handle_ref["h"].signal(
                         FsasmMilestoneFourWorkflow.receive_human_decision,
                         HumanDecisionSignal(
+                            run_id="run-w10",
                             task_id="TASK-001",
                             action=HumanDecisionAction.RETRY_ONCE,
+                            gate_id=_gate_id("run-w10", "TASK-001", 1),
+                            decision_id=_decision_id(
+                                "run-w10",
+                                "TASK-001",
+                                _gate_id("run-w10", "TASK-001", 1),
+                                HumanDecisionAction.RETRY_ONCE,
+                            ),
                         ),
                     ),
                     loop,
@@ -335,7 +344,7 @@ class TestT08AppliedMarkingAfterSuccessOnly:
 
     @pytest.mark.asyncio
     async def test_activity_failure_does_not_mark_applied(
-        self, temporal_env, monkeypatch
+        self, temporal_env, monkeypatch, full_decision_signal
     ):
         orig_save_evidence = RuntimePersistence.save_evidence
         audit_calls = {"n": 0}
@@ -357,8 +366,8 @@ class TestT08AppliedMarkingAfterSuccessOnly:
             await _wait_for_needs_human("run-t08")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-t08", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             with pytest.raises(WorkflowFailureError):

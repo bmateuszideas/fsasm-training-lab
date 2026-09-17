@@ -32,6 +32,7 @@ from src.workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
     HumanDecisionSignal,
     OpenGate,
+    _decision_id,
     _gate_id,
 )
 from src.workflows.fsasm_milestone_four import (
@@ -132,7 +133,9 @@ class TestBlockerAWrongTaskTakeover:
     decision."""
 
     @pytest.mark.asyncio
-    async def test_wrong_task_correct_gate_does_not_block_legit(self, temporal_env):
+    async def test_wrong_task_correct_gate_does_not_block_legit(
+        self, temporal_env, full_decision_signal
+    ):
         """W1: send RETRY_ONCE for TASK-999 with the CORRECT current gate_id,
         then send a legitimate RETRY_ONCE for TASK-001. The wrong-task signal
         must NOT occupy the slot; the legitimate decision must succeed."""
@@ -145,27 +148,34 @@ class TestBlockerAWrongTaskTakeover:
             await asyncio.sleep(0.2)
             await _wait_for_needs_human("run-w1")
             gate = _gate_id("run-w1", "TASK-001", 1)
-            # Wrong task, CORRECT gate_id.
+            # Wrong task, CORRECT gate_id (full IDs: the wrong task uses the
+            # open gate's gate_id but its own task_id/decision_id).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
                 HumanDecisionSignal(
+                    run_id="run-w1",
                     task_id="TASK-999",
                     action=HumanDecisionAction.RETRY_ONCE,
                     gate_id=gate,
+                    decision_id=_decision_id(
+                        "run-w1", "TASK-999", gate, HumanDecisionAction.RETRY_ONCE
+                    ),
                 ),
             )
             # Legitimate decision for TASK-001.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-w1", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
         assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_wrong_task_omitted_gate_does_not_block_legit(self, temporal_env):
+    async def test_wrong_task_omitted_gate_does_not_block_legit(
+        self, temporal_env, full_decision_signal
+    ):
         """W2: send a wrong-task signal WITHOUT an explicit gate_id, then send
         a legitimate decision. The wrong signal must not occupy the slot."""
         async with create_test_worker(
@@ -176,18 +186,18 @@ class TestBlockerAWrongTaskTakeover:
             handle = await _start(temporal_env, "run-w2", 0, 1)
             await asyncio.sleep(0.2)
             await _wait_for_needs_human("run-w2")
-            # Wrong task, NO gate_id (legacy).
+            # Wrong task, NO gate_id (legacy) -> rejected as incomplete_payload.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
                 HumanDecisionSignal(
                     task_id="TASK-999", action=HumanDecisionAction.RETRY_ONCE
                 ),
             )
-            # Legitimate decision.
+            # Legitimate decision (full IDs for the open gate).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-w2", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -222,10 +232,13 @@ class TestBlockerBSubstringRun:
         )
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id="run-1",
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
-                run_id="run-1",
                 gate_id=gate,
+                decision_id=_decision_id(
+                    "run-1", "TASK-001", gate, HumanDecisionAction.RETRY_ONCE
+                ),
             )
         )
         assert gate not in wf.accepted_decisions, (
@@ -236,7 +249,9 @@ class TestBlockerBSubstringRun:
         assert any(r["reason"] == "wrong_run" for r in wf.pending_rejections)
 
     @pytest.mark.asyncio
-    async def test_substring_run_collision_rejected_worker(self, temporal_env):
+    async def test_substring_run_collision_rejected_worker(
+        self, temporal_env, full_decision_signal
+    ):
         """W3 worker: current run ``run-10``, incoming signal claims ``run-1``
         with the correct explicit gate_id. The signal must be rejected (run-1
         is a substring of run-10's gate_id but not the same run); the
@@ -253,16 +268,19 @@ class TestBlockerBSubstringRun:
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
                 HumanDecisionSignal(
+                    run_id="run-1",
                     task_id="TASK-001",
                     action=HumanDecisionAction.RETRY_ONCE,
-                    run_id="run-1",
                     gate_id=gate,
+                    decision_id=_decision_id(
+                        "run-1", "TASK-001", gate, HumanDecisionAction.RETRY_ONCE
+                    ),
                 ),
             )
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-10", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -279,9 +297,13 @@ class TestBlockerBSubstringRun:
         )
 
     @pytest.mark.asyncio
-    async def test_substring_run_collision_omitted_gate_rejected(self, temporal_env):
+    async def test_substring_run_collision_omitted_gate_rejected(
+        self, temporal_env, full_decision_signal
+    ):
         """run-1 against run-10 with omitted gate_id (legacy). Must be
-        rejected by exact run comparison, not substring."""
+        rejected by exact run comparison, not substring. Under T03 the legacy
+        payload is rejected as incomplete_payload; the legitimate full-ID
+        decision then succeeds."""
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneFourWorkflow],
@@ -300,8 +322,8 @@ class TestBlockerBSubstringRun:
             )
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-10b", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -331,13 +353,19 @@ class TestBlockerCRejectionAudit:
             handle = await _start(temporal_env, "run-w4", 0, 999)
             await asyncio.sleep(0.2)
             await _wait_for_needs_human("run-w4")
-            # Invalid signal: wrong gate_id.
+            # Invalid signal: a complete-ID signal with a wrong gate_id
+            # (full IDs so it is rejected as wrong_gate, not incomplete).
+            wrong_gate = "gate-run-w4-TASK-001-attempt-999"
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
                 HumanDecisionSignal(
+                    run_id="run-w4",
                     task_id="TASK-001",
                     action=HumanDecisionAction.ABORT,
-                    gate_id="gate-run-w4-TASK-001-attempt-999",
+                    gate_id=wrong_gate,
+                    decision_id=_decision_id(
+                        "run-w4", "TASK-001", wrong_gate, HumanDecisionAction.ABORT
+                    ),
                 ),
             )
             # Wait for the rejection to be durably persisted WITHOUT sending

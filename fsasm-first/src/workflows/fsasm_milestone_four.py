@@ -1382,6 +1382,32 @@ class FsasmMilestoneFourWorkflow:
         decision_id = decision.decision_id
         gate_tag = self.current_gate_id if self.current_gate_id is not None else None
 
+        # T03 / policy 1 (require full IDs at the runtime boundary): a signal
+        # missing run_id, gate_id or decision_id is an incomplete payload. It is
+        # rejected BEFORE any gate is reserved or any attempt is incremented, so
+        # an unmarked legacy consent can never authorize a gate occurrence
+        # (G3). A friendly client fetches the current gate and sends a complete
+        # run_id/task_id/gate_id/decision_id payload. This rejection is recorded
+        # with the current gate tag (None when no gate is open) and does not
+        # terminate or authorize the workflow.
+        if (
+            signal_data.run_id is None
+            or decision.gate_id is None
+            or decision.decision_id is None
+        ):
+            self._append_rejection(
+                {
+                    "reason": "incomplete_payload",
+                    "gate_id": gate_tag,
+                    "run_id": signal_data.run_id,
+                    "signal_gate_id": decision.gate_id,
+                    "decision_id": decision.decision_id,
+                    "task_id": decision.task_id,
+                    "action": decision.action.value,
+                }
+            )
+            return
+
         # No open gate: reject every signal as no_open_gate (recorded with the
         # current gate tag, None). A signal before the first gate or after the
         # last gate is explicitly rejected, never silently buffered for a
@@ -1400,7 +1426,7 @@ class FsasmMilestoneFourWorkflow:
         cg = self.current_gate
 
         # BLOCKER 1: an explicit gate_id must match the currently open gate.
-        if gate_id is not None and gate_id != cg.gate_id:
+        if gate_id != cg.gate_id:
             self._append_rejection(
                 {
                     "reason": "wrong_gate",
@@ -1427,8 +1453,9 @@ class FsasmMilestoneFourWorkflow:
             return
 
         # BLOCKER B: exact run_id comparison (equality, not substring). A
-        # wrong-run signal must not occupy the first-wins slot.
-        if signal_data.run_id is not None and signal_data.run_id != cg.run_id:
+        # wrong-run signal must not occupy the first-wins slot. run_id is
+        # required above (incomplete_payload), so it is always present here.
+        if signal_data.run_id != cg.run_id:
             self._append_rejection(
                 {
                     "reason": "wrong_run",
