@@ -1,18 +1,14 @@
-# fsasm-first — FS-ASM runtime training lab
+# fsasm-first — eksperymentalna implementacja FS-ASM
 
-This is the active Mistral Workflows implementation sandbox, **not** the entire historical FS-ASM. The project contains M1–M4 code and tests; M4 is in stabilization, the Executor is still a deterministic stub, and M5 has not started. Never infer actual implementation status from an old milestone instruction or an example workflow.
+Ten katalog zawiera kod, testy i zależności obecnego poligonu, nie całą historię projektu. **Jedyna architektura docelowa:** [pełny dokument v1](docs/FSASM_ARCHITEKTURA_RUNTIME_V1_ZATWIERDZONA_2026-09-17.md). Decyzje późniejsze: [profil wdrożenia](docs/DEPLOYMENT_DECISIONS.md). Stan implementacji: [PROJECT_STATUS](PROJECT_STATUS.md). Protokół dla agenta: root [`../AGENTS.md`](../AGENTS.md), lokalny [`AGENTS.md`](AGENTS.md), [mapa dokumentacji](docs/DOCUMENTATION_MAP.md) oraz zadanie jawnie zaakceptowane przez użytkownika.
 
-## Start here (especially a new coding agent)
+## Obecny zakres (nie mylić z celem v1)
 
-1. Read [PROJECT_STATUS.md](PROJECT_STATUS.md) for the dated current state, source branch, known fixes/open tasks and one next action. **Verify actual Git branch/HEAD/PR/CI before editing.**
-2. Read [documentation map](docs/DOCUMENTATION_MAP.md) for source roles and conflict resolution and [branch policy](docs/BRANCH_POLICY.md) for the PR workflow.
-3. Read [current FS-ASM model](docs/CURRENT_FSASM_MODEL.md) for long-term intent and [AGENTS.md](AGENTS.md) for stable implementation rules; M1 bootstrap phrases in AGENTS are historical relative to the status snapshot.
-4. Inspect only the chosen atomic task's source and tests. Use [.agents/skills/workflows/SKILL.md](.agents/skills/workflows/SKILL.md) before writing SDK code.
-5. [CURRENT_DEVELOPMENT_ANCHOR.md](CURRENT_DEVELOPMENT_ANCHOR.md) is a *historical chronological record* containing superseded pause/LLMC instructions; do not follow those as current work orders. [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) is an implementation reference, not a live progress tracker.
+M1–M3 były zamknięte. M4 testuje pojedynczy Child Task (`TASK-001`) za pomocą deterministycznego stuba, retry, stan i Human Gate. PR #20 został scalony, ale sam merge nie zamyka M4. Raport z 17.09 wskazuje G3–G5 wymagające osobnego sprawdzenia/korekty; nie wolno z góry nazywać ich naprawionymi. Wciąż brak rzeczywistej pętli model→tool→observation, pełnego schedulera, Context Buildera, Model Gateway, Broker/Verifiera artefaktów i operacyjnego resume. Szczegóły w [statusie](PROJECT_STATUS.md).
 
-The previous README pointed to `ORIGIN_AND_CURRENT_UNDERSTANDING.md`, `docs/FSASM_SOURCE_AUDIT.md`, and `docs/FSASM_SOURCE_INVENTORY.md`, which are not in this checkout. Their historical context belongs to the Git history and the top-level [historical archive](../stare%20dokumenty%20rozwojowe%20fsasm/), not to a mandatory broken startup checklist.
+## Instalacja i testy
 
-## Setup and checks
+Polecenia wykonuj z `fsasm-first/`, na izolowanym checkoutcie lub katalogu bez wartościowych danych `./runtime`:
 
 ```bash
 uv sync --frozen
@@ -20,23 +16,14 @@ uv run pytest -q
 make check
 ```
 
-Run tests in an isolated checkout or environment: some legacy tests can access the default `./runtime` folder. Do not run them in a directory containing valuable runtime data. Live Mistral API tests are opt-in, and a green stub suite is not proof of real coding work.
-
-## Run workers and examples
+Testy live Mistral API są opt-in i nie były podstawą deklaracji gotowego 7B. Historyczny przykład SDK można uruchomić przez:
 
 ```bash
 make start-worker
-# In a separate terminal:
+# osobny terminal
 make execute workflow=hello-world input='{"name":"World"}'
 ```
 
-`src/workflows/` contains the FS-ASM milestone workflows plus the preserved `hello-world` scaffold. `src/fsasm/` holds the domain models, transitions, adapters, verifier and persistence. `tests/` holds unit and workflow worker regression tests. `src/entrypoints/` holds startup and execution entrypoints; `worker.py` is an entrypoint wrapper.
+`src/fsasm/` to modele, przejścia, stub, persistence i obecna demonstracyjna weryfikacja; `src/workflows/` to starsze przebiegi M1–M4, `src/entrypoints/` to wejścia, `tests/` do testów. `src/examples/` zawiera cookbook SDK, nie kod docelowego Executora. Przed zmianą Workflows przeczytaj [.agents/skills/workflows/SKILL.md](.agents/skills/workflows/SKILL.md).
 
-`src/examples/` contains standalone SDK cookbook samples (insurance claims, cargo release, code modernization and Linear summarization) and is **not** the FS-ASM Executor. These examples are not loaded by the default worker; use `make start-examples` if deliberately testing them.
-
-## Development rules
-
-- New implementation work: short-lived task branch from current `Fsasm-experimental`, focused PR against that integration branch; no unapproved direct edits to `main` or frozen LLMC branch.
-- State transitions, retry admission, permissions and PASS verification belong to deterministic domain/runtime code, not model text.
-- `EvidenceRecord` wrapping a stub claim is not an independent proof of an actual file edit or passing test.
-- Preserve historical documents; record current decisions once in `PROJECT_STATUS.md`, with PR and SHA. Never append a new conflicting 'current stop point' to the old anchor.
+**Dalsze prace:** po akceptacji ograniczony task, branch od aktualnego `Fsasm-experimental`, osobny PR i review. Nie traktuj starego „M5 następne”, trzytaskowego planu Plannera ani wcześniejszego AGENTS jako nakazu dla v1. [Kolejka migracji](docs/MIGRATION_BACKLOG_V1.md) jest propozycją do zatwierdzania etapami.

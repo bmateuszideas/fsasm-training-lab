@@ -1,36 +1,19 @@
-# FS-ASM branch policy
+# FS-ASM — polityka branchy i integracji
 
-Snapshot: 2026-09-16. This inventory reflects the branches currently present in the GitHub repository at the time of this update. Verify actual refs and GitHub settings before changing branch configuration.
+**17 września 2026.** `Fsasm-experimental` jest aktywną linią prac nad v1. `main` jest starszym, rozbieżnym branchem, a nie automatycznym wydaniem. Przed każdym działaniem odczytaj live HEAD i PR/CI zamiast przepisywać datowany inwentarz SHA.
 
-## Branches currently present
+## Zwykła praca nad kodem
 
-| Branch | Current SHA | Intended treatment |
-| --- | --- | --- |
-| `Fsasm-experimental` | `e6a3bd3e9cd6174246218dc92e6787f68e3fd12f` | Active runtime integration, source for new task branches, and target for atomic reviewed PRs |
-| `main` | `a9f8ab6640acfda21c31675a03ba53d094f2909f` | GitHub default branch; older and divergent runtime plus LLMC benchmark. Do not synchronize or force-update automatically |
-| `__noop_check__` | `30a6e56935b7238b471f7f21365c21679693de20` | Existing legacy check branch; candidate for later manual cleanup only after checking references |
+1. Po osobnej akceptacji jednego zadania utwórz krótkotrwały branch od **bieżącego** `Fsasm-experimental`; PR kieruj do `Fsasm-experimental`.
+2. PR dokumentuje pełny diff względem bazy, start/head SHA, testy i rzeczywisty CI, wyłączenia oraz niezakończone kwestie. Nie opisuj tylko ostatniego commita, jeśli PR obejmuje więcej.
+3. Reviewer sprawdza faktyczny kod i dowody. Sam `pytest green` ani `merged=true` nie zamykają milestone'u. Scalanie wymaga jawnego zatwierdzenia.
+4. Bez osobnej zgody nie zmieniaj `main`, jego statusu default, nie force-pushuj, nie kasuj branchy ani nie przenoś historii. Nie resetuj M4 tylko dlatego, że architektura v1 jest nowsza.
+5. Aktualizuj krótki `PROJECT_STATUS.md` przy rzeczywistej zmianie stanu; datowane historyczne dokumenty pozostają oznaczone jako historia.
 
-Branch refs and snapshots are not immutable. This table is a point-in-time inventory, not a substitute for checking the current GitHub branch list. The previously listed `Fsasm-llmc-testingbranch`, `vibe/f2-retry-state-consistency-b6d6c2`, and `vibe/worker-activity-name-collision-b6d6c2` branches are no longer present and are intentionally omitted from the active inventory.
+## Wyjątkowa aktualizacja dokumentacji
 
-No branch is deleted, renamed, merged, moved, or made the default by this documentation update.
+Bieżące jednorazowe uporządkowanie kontekstu zostało jawnie zlecone przez użytkownika do `Fsasm-experimental`. Może zostać wdrożone oddzielnym, wyłącznie dokumentacyjnym commitem lub PR bez zmiany `src/`, `tests/`, workflow CI czy innych branchy. Ta zgoda nie rozciąga się na następne prace programistyczne.
 
-## Work procedure
+## Fakt historyczny
 
-1. Verify the current `Fsasm-experimental` HEAD, existing open PRs, Git status, and CI. Create `task/<issue-id>-<topic>` or `docs/<topic>` from its current HEAD. Never base new work on a stale task branch or on `main` unless the integration decision explicitly requires it.
-2. Keep one narrowly defined issue, reproducer, and set of acceptance criteria per PR. State explicit exclusions; do not implement M5 while M4 is open. For documentation-only PRs, change no runtime code or tests.
-3. PRs for runtime work must target `Fsasm-experimental` and include base/head SHAs, a complete base-relative diff description, tests that ran, the actual CI URL, and outstanding issues. A commit-only summary is insufficient when review context is needed.
-4. Review the actual changes and tests at the candidate head. For state-related defects, test serialized activity boundaries and durable filesystem outcomes. Human Gate tests require controlled signal/wait conditions.
-5. Merge only after explicit review, positive CI at the correct SHA, and acceptance. Update `PROJECT_STATUS.md` in that PR or in a following status-only PR, without reporting draft work as merged.
-6. The code baseline for the next task is the post-merge `Fsasm-experimental` HEAD, not an AI summary from an old session.
-
-## `main` integration decision — separate and explicit
-
-`main` and `Fsasm-experimental` have diverged. `main` contains older runtime and LLMC research work and is not automatically synchronized with the experimental runtime. Do not fast-forward, force-reset, or merge either branch solely to make branch names or status appear consistent. Any integration must be proposed as a separate, reviewed decision with a documented purpose, tested result, and explicit approval.
-
-## Historical branch cleanup
-
-Never delete old refs as part of a documentation edit. Before removing `__noop_check__` or any future legacy branch, check branch ancestry, unique commits, open PRs, tags, external references, and benchmark provenance. Propose a named deletion list and obtain explicit approval. Git history and research provenance must remain recoverable.
-
-## Preventing context drift
-
-Use `../PROJECT_STATUS.md` as the active status snapshot. Use `CURRENT_FSASM_MODEL.md` for architecture, `../AGENTS.md` for engineering constraints, and `../CURRENT_DEVELOPMENT_ANCHOR.md` plus the archived source documents for history. Recheck this branch inventory whenever branch maintenance is performed.
+PR [#20](https://github.com/bmateuszideas/fsasm-training-lab/pull/20) scalono 17.09.2026 o 04:53 UTC; badany head `142db38079d2e15c4c65a4a3c9481bb4cdab81fd`, merge commit `f600ed210501030398740ce87006364dd78a034f`. M4 NIE zostało tym automatycznie zamknięte, a raport Astry opisuje G3–G5. Status zmian po tej dacie trzeba potwierdzić przez GitHub.

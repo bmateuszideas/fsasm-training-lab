@@ -1,62 +1,38 @@
 ---
 name: fsasm-vibe-coding
-description: Use for substantial coding work in Vibe Code Web, especially FS-ASM milestones, multi-file changes, workflow/state-machine debugging, durable handoffs, and repository-grounded review.
+description: Use for explicitly authorized FS-ASM repository coding, review, debugging and task-scoped handoffs; follow the approved runtime v1 architecture and verified Git status.
 user-invocable: true
 ---
 
-# FS-ASM Vibe Coding
+# FS-ASM Vibe Code Web — development process
 
-A single reusable **coding-process skill** for planning large changes, systematic debugging, durable session handoff, repository-grounded review and FS-ASM-specific implementation. This skill is NOT the FS-ASM runtime, the current task specification, a second status document, an approval mechanism or a replacement for the existing Mistral Workflows SDK skill.
+This is a **process skill for the external Vibe coding agent**. It is NOT the FS-ASM runtime, its local Executor, an implementation request, a new architecture, or an approval mechanism. The project source of truth is stored in GitHub because the Vibe Web chat cannot receive user-uploaded files directly into its sandbox.
 
-## Repository contracts and current state come first
+## Mandatory entry order
 
-The repository is `bmateuszideas/fsasm-training-lab`; the active integration branch is currently named `Fsasm-experimental`. Check the actual repository and branch rather than trusting a cached SHA or historical snapshot. Source and test claims must be verified at the working commit.
+1. Read the root `AGENTS.md` and the **entire** `fsasm-first/docs/FSASM_ARCHITEKTURA_RUNTIME_V1_ZATWIERDZONA_2026-09-17.md`, including sections XIX–XX. This is the ONLY approved architecture. Its SHA-256 must match `56aeeb60c8c700c71dc3d395659127afbf511e1726e0ffd76270c848fd764808`. Do not use `CURRENT_FSASM_MODEL.md` or this skill as substitutes.
+2. Read `fsasm-first/docs/DEPLOYMENT_DECISIONS.md` for subsequent user-approved hybrid/Mistral data-sharing decisions; these supplement the original without changing it.
+3. Read `fsasm-first/PROJECT_STATUS.md`, `fsasm-first/docs/DOCUMENTATION_MAP.md` and `fsasm-first/docs/BRANCH_POLICY.md`. Verify actual `Fsasm-experimental` HEAD, PRs and CI live, because dated reports can be stale.
+4. Read the user's explicitly approved atomic task, relevant code/tests and `references/fsasm-implementation.md`. For actual Mistral Workflows SDK changes, read `fsasm-first/.agents/skills/workflows/SKILL.md` and targeted reference pages before editing. Run commands from `fsasm-first/`.
 
-Before any implementation or branch operation, read in order:
+If the canonical document is missing or the hash differs, stop architecture changes and report it. Never fabricate a reconstruction from earlier conversation text. `CURRENT_DEVELOPMENT_ANCHOR.md` and `IMPLEMENTATION_SUMMARY.md` are historical references; they are not live startup instructions.
 
-1. Repository root `AGENTS.md` (context-entry and authorization rules).
-2. `fsasm-first/PROJECT_STATUS.md` (the **only current project-status entry point**); cross-check its dated claims against live Git, merged PRs, source and CI.
-3. `fsasm-first/docs/BRANCH_POLICY.md` and `fsasm-first/docs/DOCUMENTATION_MAP.md`.
-4. `fsasm-first/AGENTS.md` and the relevant parts of `fsasm-first/docs/CURRENT_FSASM_MODEL.md`.
-5. The user's actual atomic task, acceptance criteria, relevant source and tests.
-6. For Mistral Workflows implementation, the existing SDK guide: `fsasm-first/.agents/skills/workflows/SKILL.md`, plus its targeted references.
+## Optional targeted references
 
-Run project commands from `fsasm-first/`. `CURRENT_DEVELOPMENT_ANCHOR.md` is a **historical** running record and its old LLMC-pause/next-action instructions are superseded. `IMPLEMENTATION_SUMMARY.md` is implementation history, not live status. Never silently resolve a conflict between current status, explicit authorization, code and tests; report it.
+- `references/fsasm-implementation.md`: runtime/domain invariants and migration boundaries.
+- `references/large-code-planning.md`: multi-file changes within an approved scope.
+- `references/systematic-debugging.md`: reproduce an observed issue.
+- `references/code-review.md`: repository-grounded self-review; not independent approval.
+- `references/session-handoff.md`: task-specific handoff at context boundary.
 
-**Skill scope does not grant task authorization.** Do not select or implement a new backlog issue, merge/close a PR or milestone, start M5, reactivate LLMC, synchronize `main`, delete branches, or alter GitHub settings merely because this skill mentions the workflow. Explicit user instructions and repository contracts take precedence over generic advice here.
+Choose only what the task requires. Do not dump every historical conversation or skill reference into model context.
 
-## Choose focused references (progressive disclosure)
+## Coding conduct
 
-- Large or multi-file change: `references/large-code-planning.md`.
-- Failing test, broken workflow, regression or unexpected state: `references/systematic-debugging.md`.
-- Approaching context/session end: `references/session-handoff.md`.
-- Separate review of a commit/PR/milestone: `references/code-review.md`.
-- Any FS-ASM implementation or repair: **also** `references/fsasm-implementation.md`.
+When a task is explicitly approved: inspect exact baseline and required contracts; write a short plan; change ONLY the bounded task; inspect diff; run targeted tests and, for runtime modifications where appropriate, full `uv run pytest`, `make check` and `git diff --check`; document actual results and known limits. Fix ordinary failures within the approved task without repeated permission prompts. Keep runtime data out of Git and tests in isolated temporary workspaces. Do not claim real-model success from scripted fixtures.
 
-For a multi-file FS-ASM task, normally read the FS-ASM implementation reference, then large-code planning; debugging and handoff are conditional. A self-review is not independent external review.
+Develop from current `Fsasm-experimental` on a short task branch, PR back to that integration line, and await external review/approval for merge. Do not update `main`, delete branches, force-push, close M4, launch M5/LLMC, or silently extend architecture. PR #20 is merged as of 17 September but G3–G5 and M4 closure remain separate. Later Git may supersede this sentence; check it.
 
-## Default implementation behavior
+The approved profile is hybrid Workflows: worker/workspace/local ~7B on the user's laptop, cloud orchestrator permitted. The user accepts clear-text workflow data and telemetry to Mistral. Do not impose encryption/telemetry shutdown as a new privacy gate, but do protect API credentials and executable tool permissions. Real local model integration happens **only after** the complete stub-tested runtime is moved to the laptop; Vibe Web cannot access that local model.
 
-When the user has explicitly requested implementation with approved scope or acceptance criteria:
-
-1. Inspect Git state and read the authoritative contracts.
-2. Inspect only relevant code/tests and write a concise plan.
-3. Implement a single bounded task, verify meaningful phases and inspect diffs.
-4. Fix routine implementation/test failures autonomously without repeatedly asking whether to continue.
-5. Stop only for a genuinely blocking ambiguity, missing authorization or unsafe operation that cannot be resolved from the task/contracts.
-6. Run the verification appropriate to the actual scope. For runtime tasks use required focused tests, full pytest, `make check` and `git diff --check` unless the task contract says otherwise. For documentation-only work, validate paths, Markdown/references/diff and use applicable CI; do not claim tests were run if they were not.
-7. Do not begin the next task or claim DONE merely because a model says work is finished.
-
-## Repository truth beats agent memory
-
-Verify important claims against actual files, Git history/diff, tests, persisted runtime artifacts and current documentation. Previous summaries and handoffs are leads, not authoritative truth. Never invent test results, commits, CI state or observed behavior.
-
-## Editing and Git safety
-
-Prefer precise edits, check diffs after bulk operations, never intentionally commit syntax-broken files, and preserve unrelated completed work. Check `git status --short`, `git diff --stat` and `git diff` before delivery. Start a short-lived task branch from the current `Fsasm-experimental` HEAD and target an atomic PR there when the user authorizes a change. Do not push broken intermediate states. Follow `BRANCH_POLICY.md`; do not merge your own implementation PR unless separately authorized.
-
-## Completion and handoff
-
-For an FS-ASM implementation PR, report `IMPLEMENTED — READY FOR EXTERNAL REVIEW`, with commit SHA, changed files, tests and actual CI status. This phrase is **not** approval to merge or to mark an issue/milestone CLOSED. For skill/documentation work, report the actual PR state without using implementation-completion claims.
-
-Before a session ends or context degrades, persist a task-specific, factual handoff on its branch/PR and push it when needed. Do not create a competing global project-status file; after a new session starts, re-verify the handoff against Git. See `references/session-handoff.md`.
+A coding PR is `IMPLEMENTED — READY FOR EXTERNAL REVIEW` only after the stated checks; a green test or model declaration cannot mark a milestone CLOSED. Report SHA, changed paths, tests with their limitations and the next unresolved decision. Stop at the task boundary.
