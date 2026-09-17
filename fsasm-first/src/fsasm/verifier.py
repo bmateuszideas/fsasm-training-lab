@@ -1,14 +1,30 @@
-"""FS-ASM Deterministic Verifier for milestone 1."""
+"""FS-ASM Deterministic Verifier for milestone 1.
+
+The v1 Verification Plane (T13) lives here too: :class:`ArtifactVerifier`
+reads the real artifact and a real ``run_checks`` observation — never the
+Executor's claim — and produces evidence bound to one attempt + operation +
+artifact + check. The Domain Core alone grants the transition.
+"""
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from fsasm.models import (
     ChildTask,
     EvidenceRecord,
     Plan,
     RunState,
+    ToolObservation,
+    ToolOperationKind,
     VerificationCheck,
     VerificationResult,
     VerificationResultStatus,
+    artifact_id_for,
+    evidence_id_for,
 )
+
+if TYPE_CHECKING:
+    from fsasm.tool_broker import ToolBroker
 
 
 class DeterministicVerifier:
@@ -610,3 +626,302 @@ class DeterministicVerifier:
 
 # Singleton instance for convenience
 verifier = DeterministicVerifier()
+
+
+# =============================================================================
+# T13 — Independent Verifier and Evidence Plane
+# =============================================================================
+
+
+@dataclass
+class VerifyRequest:
+    """Inputs the v1 Verifier needs to inspect the real artifact and checks.
+
+    The Verifier never trusts the Executor's claim (``"I am done"``); it reads
+    the actual artifact/diff and the real ``run_checks`` observation produced
+    by the Tool Broker, then binds the result to one attempt + operation +
+    artifact + check. It returns a :class:`VerificationResult` and the
+    :class:`EvidenceRecord` list it produced; it never grants the state
+    transition — the Domain Core does (architecture §29, §30; F8).
+    """
+
+    run_id: str
+    task_id: str
+    attempt: int
+    artifact_path: str
+    patch_observation_id: str
+    check_observation_id: str
+    check_observation: "ToolObservation"
+
+
+@dataclass
+class ArtifactVerifier:
+    """Independent verifier reading the real artifact and a real check result.
+
+    The Executor may claim ``"DONE"``; this verifier reads the actual artifact
+    via the Tool Broker (so a claim with no effect cannot PASS), inspects the
+    real ``run_checks`` :class:`ToolObservation` (so a stale or foreign check
+    cannot PASS), and binds the result to the full identity of the attempt. It
+    produces evidence records for the current attempt; the Domain Core decides
+    the transition. A negative check, missing evidence, a stale attempt, a
+    foreign artifact or a ``"DONE"`` without effect all block PASS.
+
+    The verifier holds no authority: it does not grant PASS, retry or gate. It
+    returns ``(result, evidence_records)``; the caller persists evidence then
+    asks the Domain Core to apply ``EvidenceAccepted`` + PASS/FAIL.
+    """
+
+    broker: "ToolBroker"
+    allowed_files: list[str] = field(default_factory=list)
+    # The expected check outcome: a non-zero exit is a negative result (FAIL);
+    # zero is a pass. The broker already proved the check ran in-scope.
+    expected_exit_code: int = 0
+    # Optional expected content substring the real artifact must contain (e.g.
+    # the patched code). When empty, only the artifact's existence + a passing
+    # check are required; the Executor's text claim is never sufficient.
+    expected_artifact_contains: str = ""
+
+    def verify(
+        self, request: VerifyRequest
+    ) -> tuple[VerificationResult, list[EvidenceRecord]]:
+        run_id = request.run_id
+        task_id = request.task_id
+        attempt = request.attempt
+        artifact_id = artifact_id_for(run_id, task_id, attempt)
+        checks: list[VerificationCheck] = []
+        evidence: list[EvidenceRecord] = []
+        # The check identity is the CheckKind of the run_checks observation.
+        check_identity = (
+            request.check_observation.check_kind.value
+            if request.check_observation.check_kind is not None
+            else request.check_observation.kind.value
+        )
+
+        # 1. Identity: the check observation must belong to THIS attempt. A
+        # stale or foreign observation cannot authorize PASS. The operation id
+        # is bound to a specific attempt (and any step within it); we verify the
+        # supplied id matches the observation and the observation's attempt
+        # matches the request's attempt.
+        expected_op_prefix = f"op-{run_id}-{task_id}-attempt-{attempt}-"
+        if request.check_observation_id != request.check_observation.operation_id:
+            checks.append(
+                VerificationCheck(
+                    check_name="check observation identity",
+                    passed=False,
+                    message=(
+                        "check observation id mismatch: supplied "
+                        f"{request.check_observation_id!r} != observation "
+                        f"{request.check_observation.operation_id!r}"
+                    ),
+                    check_identity=check_identity,
+                )
+            )
+        elif not request.check_observation.operation_id.startswith(expected_op_prefix):
+            checks.append(
+                VerificationCheck(
+                    check_name="check observation bound to attempt",
+                    passed=False,
+                    message=(
+                        f"check observation {request.check_observation.operation_id!r}"
+                        f" does not match attempt {attempt} (expected prefix "
+                        f"{expected_op_prefix!r})"
+                    ),
+                    check_identity=check_identity,
+                )
+            )
+        else:
+            checks.append(
+                VerificationCheck(
+                    check_name="check observation identity",
+                    passed=True,
+                    message="check observation bound to current attempt/operation",
+                    check_identity=check_identity,
+                )
+            )
+
+        # 2. The check observation must not be a policy block / timeout /
+        # process error. A blocked or timed-out check cannot be a PASS.
+        if request.check_observation.kind is not ToolOperationKind.RUN_CHECKS:
+            checks.append(
+                VerificationCheck(
+                    check_name="observation is a run_checks result",
+                    passed=False,
+                    message=(
+                        "observation kind is "
+                        f"{request.check_observation.kind.value!r}, not run_checks"
+                    ),
+                    check_identity=check_identity,
+                )
+            )
+        elif request.check_observation.blocked:
+            checks.append(
+                VerificationCheck(
+                    check_name="check not blocked by policy",
+                    passed=False,
+                    message=f"check was blocked: {request.check_observation.reason}",
+                    check_identity=check_identity,
+                )
+            )
+        elif request.check_observation.timed_out:
+            checks.append(
+                VerificationCheck(
+                    check_name="check did not time out",
+                    passed=False,
+                    message="check timed out",
+                    check_identity=check_identity,
+                )
+            )
+        elif request.check_observation.exit_code is None:
+            checks.append(
+                VerificationCheck(
+                    check_name="check produced an exit code",
+                    passed=False,
+                    message="check produced no exit code (process error)",
+                    check_identity=check_identity,
+                )
+            )
+        else:
+            checks.append(
+                VerificationCheck(
+                    check_name="check ran to completion",
+                    passed=True,
+                    message=f"check completed, exit code "
+                    f"{request.check_observation.exit_code}",
+                    check_identity=check_identity,
+                )
+            )
+
+        # 3. The check result: exit code must match the expected outcome. A
+        # negative result is recorded honestly (FAIL), never as PASS.
+        if request.check_observation.exit_code is not None and not (
+            request.check_observation.blocked or request.check_observation.timed_out
+        ):
+            passed = request.check_observation.exit_code == self.expected_exit_code
+            checks.append(
+                VerificationCheck(
+                    check_name=f"check exit code == {self.expected_exit_code}",
+                    passed=passed,
+                    message=(
+                        f"exit code {request.check_observation.exit_code}"
+                        + ("" if passed else f" != {self.expected_exit_code}")
+                    ),
+                    check_identity=check_identity,
+                )
+            )
+
+        # 4. The artifact must actually exist and contain the expected effect.
+        # This reads the REAL file via the Broker, so a ``"DONE"`` claim with no
+        # change cannot PASS (G2 reproducer).
+        inspect = self.broker.inspect_changes(
+            run_id,
+            task_id,
+            attempt,
+            0,
+            request.artifact_path,
+            allowed_files=self.allowed_files,
+        )
+        if inspect.blocked or not inspect.ok:
+            checks.append(
+                VerificationCheck(
+                    check_name="artifact exists and is readable",
+                    passed=False,
+                    message=f"artifact not readable: {inspect.reason}",
+                    check_identity=check_identity,
+                )
+            )
+            artifact_ok = False
+        else:
+            checks.append(
+                VerificationCheck(
+                    check_name="artifact exists and is readable",
+                    passed=True,
+                    message=f"read artifact {request.artifact_path}",
+                    check_identity=check_identity,
+                )
+            )
+            artifact_ok = True
+            if self.expected_artifact_contains:
+                present = self.expected_artifact_contains in inspect.content
+                checks.append(
+                    VerificationCheck(
+                        check_name="artifact contains expected effect",
+                        passed=present,
+                        message=(
+                            "expected content present"
+                            if present
+                            else "expected content NOT present in artifact"
+                        ),
+                        check_identity=check_identity,
+                    )
+                )
+
+        # Overall PASS requires: identity ok, check ran, check passed, and
+        # artifact readable (and contains expected effect if specified). A
+        # single failed check means FAIL — no PASS from a "DONE" claim.
+        all_passed = bool(checks) and all(c.passed for c in checks)
+        status = (
+            VerificationResultStatus.PASS
+            if all_passed
+            else VerificationResultStatus.FAIL
+        )
+
+        # Build evidence for the current attempt. Evidence is produced for the
+        # real artifact + real check observation, bound to the full identity.
+        # On FAIL, evidence still records what was observed (diagnostic); only
+        # accepted evidence refs authorize PASS, and the Domain Core enforces
+        # that. The caller persists evidence BEFORE the snapshot accepts refs.
+        if artifact_ok:
+            evidence.append(
+                EvidenceRecord(
+                    evidence_id=evidence_id_for(run_id, task_id, attempt, "artifact"),
+                    run_id=run_id,
+                    task_id=task_id,
+                    kind="artifact",
+                    source="tool_broker.inspect_changes",
+                    payload={
+                        "artifact_path": request.artifact_path,
+                        "content_excerpt": inspect.content[:512],
+                    },
+                    attempt=attempt,
+                    operation_id=request.patch_observation_id,
+                    artifact_id=artifact_id,
+                    check_identity=check_identity,
+                )
+            )
+        evidence.append(
+            EvidenceRecord(
+                evidence_id=evidence_id_for(run_id, task_id, attempt, "check"),
+                run_id=run_id,
+                task_id=task_id,
+                kind="check_result",
+                source="tool_broker.run_checks",
+                payload={
+                    "exit_code": request.check_observation.exit_code,
+                    "stdout_excerpt": request.check_observation.stdout[:512],
+                    "stderr_excerpt": request.check_observation.stderr[:512],
+                    "timed_out": request.check_observation.timed_out,
+                    "blocked": request.check_observation.blocked,
+                },
+                attempt=attempt,
+                operation_id=request.check_observation_id,
+                artifact_id=artifact_id,
+                check_identity=check_identity,
+            )
+        )
+
+        result = VerificationResult(
+            run_id=run_id,
+            task_id=task_id,
+            status=status,
+            checks=checks,
+            message=(
+                "artifact verification PASSED"
+                if all_passed
+                else "artifact verification FAILED"
+            ),
+            attempt=attempt,
+            operation_id=request.patch_observation_id,
+            artifact_id=artifact_id,
+            evidence_refs=[e.evidence_id for e in evidence] if all_passed else [],
+        )
+        return result, evidence
