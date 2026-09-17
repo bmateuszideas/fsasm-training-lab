@@ -1,62 +1,24 @@
-"""FS-ASM state transition rules and functions."""
+"""FS-ASM state transition rules and functions.
+
+The transition matrices are owned by the Domain Core (``fsasm.domain``) so
+there is one set of rules, not two. This module keeps the imperative M4 API
+(``transition_task``/``transition_run``/``apply_human_authorized_*``) that the
+milestone demonstrator calls; it re-uses the matrices from ``fsasm.domain`` via
+private aliases so the rules live exactly once. The clean ``apply_event`` path
+in ``fsasm.domain`` is the v1 single mutation path (T05); activities migrate to
+it in T07.
+"""
 
 from fsasm.models import ChildTask, RunState, RunStatus, TaskStatus
 from fsasm.errors import InvalidTransitionError, RetryExhaustedError
-
-
-# =============================================================================
-# TASK TRANSITION RULES
-# =============================================================================
-
-# Allowed transitions for TaskStatus
-_TASK_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.PENDING: {TaskStatus.READY, TaskStatus.BLOCKED},
-    TaskStatus.READY: {TaskStatus.RUNNING, TaskStatus.BLOCKED},
-    TaskStatus.RUNNING: {TaskStatus.PASSED, TaskStatus.FAILED, TaskStatus.BLOCKED},
-    TaskStatus.PASSED: set(),  # Terminal state - no outgoing transitions
-    TaskStatus.FAILED: {
-        TaskStatus.READY,
-        TaskStatus.NEEDS_HUMAN,
-    },  # Can retry if budget remains, or escalate
-    TaskStatus.BLOCKED: {TaskStatus.READY},  # Can become ready when unblocked
-    TaskStatus.NEEDS_HUMAN: set(),  # Terminal state - human-authorized transitions handled separately
-}
-
-# Transitions that require verification PASS
-_TASK_REQUIRES_VERIFICATION_PASS: set[tuple[TaskStatus, TaskStatus]] = {
-    (TaskStatus.RUNNING, TaskStatus.PASSED),
-}
-
-# Transitions that require verification FAIL or retry exhaustion
-_TASK_REQUIRES_VERIFICATION_FAIL: set[tuple[TaskStatus, TaskStatus]] = {
-    (TaskStatus.RUNNING, TaskStatus.FAILED),
-}
-
-# Transitions that require retry budget check
-_TASK_REQUIRES_RETRY_CHECK: set[tuple[TaskStatus, TaskStatus]] = {
-    (TaskStatus.FAILED, TaskStatus.READY),
-    (TaskStatus.FAILED, TaskStatus.NEEDS_HUMAN),
-}
-
-
-# =============================================================================
-# RUN TRANSITION RULES
-# =============================================================================
-
-# Allowed transitions for RunStatus
-_RUN_ALLOWED_TRANSITIONS: dict[RunStatus, set[RunStatus]] = {
-    RunStatus.CREATED: {RunStatus.PLANNED},
-    RunStatus.PLANNED: {RunStatus.RUNNING},
-    RunStatus.RUNNING: {RunStatus.PASSED, RunStatus.FAILED, RunStatus.NEEDS_HUMAN},
-    RunStatus.PASSED: set(),  # Terminal state
-    RunStatus.FAILED: set(),  # Terminal state
-    RunStatus.NEEDS_HUMAN: set(),  # Terminal state
-}
-
-# Transitions that require verification PASS for the entire run
-_RUN_REQUIRES_VERIFICATION_PASS: set[tuple[RunStatus, RunStatus]] = {
-    (RunStatus.RUNNING, RunStatus.PASSED),
-}
+from fsasm.domain import (
+    TASK_ALLOWED_TRANSITIONS as _TASK_ALLOWED_TRANSITIONS,
+    RUN_ALLOWED_TRANSITIONS as _RUN_ALLOWED_TRANSITIONS,
+    TASK_REQUIRES_VERIFICATION_PASS as _TASK_REQUIRES_VERIFICATION_PASS,
+    TASK_REQUIRES_VERIFICATION_FAIL as _TASK_REQUIRES_VERIFICATION_FAIL,
+    TASK_REQUIRES_RETRY_CHECK as _TASK_REQUIRES_RETRY_CHECK,
+    RUN_REQUIRES_VERIFICATION_PASS as _RUN_REQUIRES_VERIFICATION_PASS,
+)
 
 
 # =============================================================================
