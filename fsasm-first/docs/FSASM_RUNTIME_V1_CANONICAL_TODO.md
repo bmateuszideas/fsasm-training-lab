@@ -406,10 +406,10 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Proponowane:** `src/fsasm/adapters/local.py`, testowy serwer/fixture i `tests/test_v1_local_adapter_contract.py`.
 
-- [ ] Wybrać jeden protokół lokalnej inferencji po porównaniu zgodności z tool callingiem, Windows/docelowym OS, streamingiem, timeoutami i metadanymi usage.
-- [ ] Adapter tłumaczy tylko transport i format; nie kopiuje Executor Loop ani polityk routingu.
-- [ ] Znormalizować tool calls, final response, invalid output, timeout i unavailable backend.
-- [ ] Testować na kontrolowanym serwerze/fixture bez prawdziwego 7B.
+- [x] Wybrać jeden protokół lokalnej inferencji po porównaniu zgodności z tool callingiem, Windows/docelowym OS, streamingiem, timeoutami i metadanymi usage.
+- [x] Adapter tłumaczy tylko transport i format; nie kopiuje Executor Loop ani polityk routingu.
+- [x] Znormalizować tool calls, final response, invalid output, timeout i unavailable backend.
+- [x] Testować na kontrolowanym serwerze/fixture bez prawdziwego 7B.
 
 **Odbiór:** wszystkie kontraktowe scenariusze Gateway przechodzą przez adapter lokalny; brak zależności Domain Core od biblioteki serwera inferencji.
 
