@@ -27,6 +27,7 @@ from src.workflows.fsasm_milestone_four import (
     find_next_ready_task_activity,
     persist_failure_state_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
     persist_initial_state_activity,
     persist_retry_state_activity,
     set_task_max_attempts_activity,
@@ -63,6 +64,7 @@ _M4_ACTIVITIES = [
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
 ]
 
 

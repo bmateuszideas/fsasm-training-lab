@@ -42,6 +42,7 @@ from src.workflows.fsasm_milestone_four import (
     find_next_ready_task_activity,
     persist_failure_state_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
     persist_initial_state_activity,
     persist_retry_state_activity,
     set_task_max_attempts_activity,
@@ -79,6 +80,7 @@ _M4_ACTIVITIES = [
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
 ]
 
 
@@ -406,3 +408,230 @@ class TestF6F7WorkerLevelScenarios:
             e for e in p.load_all_evidence("run-sc7") if e.kind == "human_gate_audit"
         ]
         assert len(gate_audits) == 1
+
+    @pytest.mark.asyncio
+    async def test_8_conflicting_decisions_no_overwrite(self, temporal_env):
+        """Conflicting decisions do not overwrite the accepted decision
+        (first-wins). Send ABORT then RETRY_ONCE before consumption; ABORT
+        must win and the run must end FAILED."""
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=_M4_ACTIVITIES,
+        ):
+            handle = await self._start(temporal_env, "run-sc8", 0, 999)
+            await asyncio.sleep(0.2)
+            await _wait_for_needs_human(temporal_env, "run-sc8")
+            # ABORT first.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                ),
+            )
+            # Conflicting RETRY_ONCE before consumption.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                ),
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+        assert result["status"] == "FAILED"
+        assert result["human_decision"]["action"] == "ABORT"
+        # Only one gate audit (the ABORT), not the overwritten RETRY_ONCE.
+        p = RuntimePersistence()
+        gate_audits = [
+            e for e in p.load_all_evidence("run-sc8") if e.kind == "human_gate_audit"
+        ]
+        assert len(gate_audits) == 1
+        assert gate_audits[0].payload["action"] == "ABORT"
+
+    @pytest.mark.asyncio
+    async def test_9_stale_gate_decision_rejected(self, temporal_env):
+        """A stale decision (earlier gate's identity) cannot authorize the next
+        gate. Approve gate 1 (RETRY_ONCE), fail again to reach gate 2, then
+        attempt to replay gate 1's decision_id. The stale signal must be
+        rejected and gate 2 must remain NEEDS_HUMAN until a valid gate-2
+        decision arrives."""
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=_M4_ACTIVITIES,
+        ):
+            handle = await self._start(temporal_env, "run-sc9", 0, 999)
+            await asyncio.sleep(0.2)
+            await _wait_for_needs_human(temporal_env, "run-sc9")
+            # Gate 1: RETRY_ONCE with an explicit stale gate_id.
+            gate1 = _gate_id("run-sc9", "TASK-001", 1)
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    gate_id=gate1,
+                ),
+            )
+            await asyncio.sleep(0.2)
+            # Fail again -> gate 2.
+            await _wait_for_needs_human(temporal_env, "run-sc9")
+            gate2 = _gate_id("run-sc9", "TASK-001", 2)
+            # Attempt to replay gate 1's decision_id against gate 2 (stale).
+            # Use the same gate_id=gate1 which no longer matches the open gate2.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    gate_id=gate1,
+                ),
+            )
+            # The stale signal must be rejected; gate 2 still waits. Now send a
+            # valid gate-2 ABORT.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.ABORT,
+                    gate_id=gate2,
+                ),
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+        assert result["status"] == "FAILED"
+        assert result["human_decision"]["action"] == "ABORT"
+        # Two distinct gate audits (gate1 RETRY_ONCE, gate2 ABORT), not a
+        # replayed stale decision.
+        p = RuntimePersistence()
+        gate_audits = [
+            e for e in p.load_all_evidence("run-sc9") if e.kind == "human_gate_audit"
+        ]
+        gate_ids = {e.payload.get("gate_id") for e in gate_audits}
+        assert gate1 in gate_ids
+        assert gate2 in gate_ids
+
+    @pytest.mark.asyncio
+    async def test_10_wrong_run_wrong_task_decision_rejected(self, temporal_env):
+        """A decision for the wrong run or wrong task is rejected without
+        terminating the workflow. The valid gate then receives a correct
+        decision and completes."""
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=_M4_ACTIVITIES,
+        ):
+            handle = await self._start(temporal_env, "run-sc10", 0, 1)
+            await asyncio.sleep(0.2)
+            await _wait_for_needs_human(temporal_env, "run-sc10")
+            # Wrong-task signal (gate_id for a different task on the same run).
+            wrong_task_gate = _gate_id("run-sc10", "TASK-999", 1)
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-999",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    gate_id=wrong_task_gate,
+                ),
+            )
+            # Wrong-run signal (explicit gate_id for another run).
+            wrong_run_gate = _gate_id("run-OTHER", "TASK-001", 1)
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    run_id="run-OTHER",
+                    gate_id=wrong_run_gate,
+                ),
+            )
+            # Workflow still waiting; send the correct decision.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                ),
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+        assert result["success"] is True
+        assert result["human_decision"]["action"] == "RETRY_ONCE"
+        # Exactly one accepted gate audit (the correct decision).
+        p = RuntimePersistence()
+        gate_audits = [
+            e for e in p.load_all_evidence("run-sc10") if e.kind == "human_gate_audit"
+        ]
+        assert len(gate_audits) == 1
+
+    @pytest.mark.asyncio
+    async def test_11_valid_early_signal_preserved_worker(self, temporal_env):
+        """A valid signal arriving immediately after NEEDS_HUMAN persistence
+        but before the workflow reaches its wait must be preserved (worker
+        test). Because the workflow registers current_gate_id before
+        persistence, a legacy signal (no explicit gate_id) sent right after
+        NEEDS_HUMAN is bound to the open gate and consumed."""
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=_M4_ACTIVITIES,
+        ):
+            handle = await self._start(temporal_env, "run-sc11", 0, 1)
+            # Poll until NEEDS_HUMAN is persisted, then send the signal
+            # immediately (the precise post-persist/pre-wait window).
+            state = await _wait_for_needs_human(temporal_env, "run-sc11")
+            assert state.status == RunStatus.NEEDS_HUMAN
+            # Send the valid legacy signal right after persistence.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                ),
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+        assert result["success"] is True
+        assert result["human_decision"]["action"] == "RETRY_ONCE"
+
+    @pytest.mark.asyncio
+    async def test_12_future_gate_pre_authorization_rejected(self, temporal_env):
+        """A decision explicitly targeting a future (unopened) gate is rejected
+        and cannot pre-authorize that gate. After the current gate is validly
+        approved and the next gate opens, the pre-sent future decision is NOT
+        consumed automatically."""
+        async with create_test_worker(
+            temporal_env,
+            workflows=[FsasmMilestoneFourWorkflow],
+            activities=_M4_ACTIVITIES,
+        ):
+            handle = await self._start(temporal_env, "run-sc12", 0, 999)
+            await asyncio.sleep(0.2)
+            await _wait_for_needs_human(temporal_env, "run-sc12")
+            gate1 = _gate_id("run-sc12", "TASK-001", 1)
+            gate2 = _gate_id("run-sc12", "TASK-001", 2)
+            # Pre-send a decision for the FUTURE gate 2 (must be rejected).
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    gate_id=gate2,
+                ),
+            )
+            # Validly approve gate 1.
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001",
+                    action=HumanDecisionAction.RETRY_ONCE,
+                    gate_id=gate1,
+                ),
+            )
+            await asyncio.sleep(0.2)
+            # Fail again -> gate 2 opens. The pre-sent future decision must NOT
+            # be consumed automatically; gate 2 waits for a real decision.
+            await _wait_for_needs_human(temporal_env, "run-sc12")
+            await handle.signal(
+                FsasmMilestoneFourWorkflow.receive_human_decision,
+                HumanDecisionSignal(
+                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                ),
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+        assert result["status"] == "FAILED"
+        assert result["human_decision"]["action"] == "ABORT"

@@ -738,12 +738,27 @@ class RuntimePersistence:
         stale or partially written ``plan.json`` cannot contradict the
         authoritative snapshot).
 
+        Fail-closed rule for F4-initialized runs: a run created via
+        ``create_run`` (reservation marker present) treats ``state.json`` as
+        the sole authority. If ``state.json`` is absent, or exists but has no
+        embedded plan, ``load_plan`` returns ``None`` rather than falling back
+        to an orphan/stale ``plan.json``. This prevents an F4-reserved
+        partially initialized run (or a run whose authoritative state lost its
+        plan) from presenting a derived ``plan.json`` as a legitimate plan.
+
+        Legacy-plan-only path: a directory that was NOT created via
+        ``create_run`` (no reservation marker) and has only ``plan.json`` keeps
+        the legacy read so existing legacy tests that intentionally persist a
+        standalone ``plan.json`` are not silently broken. ``state.json`` is
+        still preferred when present.
+
         Args:
             run_id: The run ID to load.
 
         Returns:
-            The authoritative Plan (from ``state.json`` when present, else the
-            derived ``plan.json``), or None if neither exists.
+            The authoritative Plan (from ``state.json`` when present with an
+            embedded plan), a legacy standalone ``plan.json`` for an
+            unreserved run, or None.
 
         Raises:
             PersistenceError: If the authoritative ``state.json`` exists but is
@@ -754,11 +769,23 @@ class RuntimePersistence:
         if state is not None:
             if state.plan is not None:
                 return state.plan
-            # state.json exists but has no embedded plan; fall through to the
-            # derived view (legacy/transition period) rather than returning None.
+            # state.json exists but has no embedded plan. For an F4-
+            # initialized run, the authority says "no plan": fail closed (do
+            # NOT fall through to an orphan/stale plan.json). For a legacy run
+            # (no reservation marker), fall through to the legacy plan-only
+            # read.
+            if self.is_run_initialized(run_id):
+                return None
 
+        # Legacy-plan-only path: only read a standalone plan.json for a run
+        # that was NOT created via create_run (no reservation marker). An
+        # F4-initialized run with absent authority never reaches here.
         path = self._get_plan_path(run_id)
         if not path.exists():
+            return None
+        if self.is_run_initialized(run_id):
+            # F4-initialized run with absent/plan-less authority: the orphan
+            # plan.json is NOT authoritative.
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:

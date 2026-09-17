@@ -221,8 +221,15 @@ class TestF3AuthoritativeSnapshotContract:
 
 
 class TestF3FaultInjection:
-    """Inject failures at controlled persistence boundaries and read the
-    actual persisted JSON from disk after each failure."""
+    """Inject ACTUAL write failures at controlled persistence boundaries and
+    read the actual persisted JSON from disk after each failure.
+
+    These tests monkeypatch ``RuntimePersistence._atomic_write_json`` to raise
+    at a specific write (the Nth call) so that ``commit_run_state`` fails
+    mid-commit. They then inspect the real on-disk files and exercise recovery.
+    No mocked assertion that a helper was called — the real filesystem is the
+    oracle.
+    """
 
     def test_failure_before_first_state_write(self, tmp_persistence):
         """A crash before the first authoritative commit leaves no authoritative
@@ -236,11 +243,12 @@ class TestF3FaultInjection:
             p.recover_run(run_id)
 
     def test_failure_after_authoritative_commit_before_derived_view(
-        self, tmp_persistence
+        self, tmp_persistence, monkeypatch
     ):
-        """A crash after state.json is committed but before plan.json leaves
-        state.json authoritative and plan.json absent/stale. Recovery repairs
-        plan.json from state.json."""
+        """Inject a real failure: ``commit_run_state`` writes state.json
+        (authoritative) successfully, then the derived plan.json write raises.
+        After the failure, state.json is authoritative and plan.json is absent.
+        Recovery repairs plan.json from state.json."""
         p = tmp_persistence
         run_id = "run-after-state-001"
         p.create_run(run_id)
@@ -248,12 +256,32 @@ class TestF3FaultInjection:
         state = _make_state(run_id, plan, status=RunStatus.RUNNING)
         state.plan.tasks[0].status = TaskStatus.PASSED
 
-        # Simulate: write ONLY state.json (authoritative), skip plan.json.
-        p.save_run_state(state)
+        call_count = {"n": 0}
+        original = p._atomic_write_json
+
+        def failing_write(path, data):
+            call_count["n"] += 1
+            # First write = state.json (authoritative). Let it succeed.
+            # Second write = plan.json (derived). Make it raise.
+            if call_count["n"] == 2:
+                raise PersistenceError(
+                    message="injected derived-view write failure",
+                    path=str(path),
+                    operation="injected",
+                )
+            return original(path, data)
+
+        monkeypatch.setattr(p, "_atomic_write_json", failing_write)
+        with pytest.raises(PersistenceError):
+            p.commit_run_state(state)
+
+        # state.json (authoritative) was written; plan.json was NOT.
+        assert p._get_state_path(run_id).exists()
         assert not p._get_plan_path(run_id).exists()
 
         # load_plan returns the authoritative plan (from state.json) even though
         # plan.json is absent.
+        monkeypatch.undo()
         loaded_plan = p.load_plan(run_id)
         assert loaded_plan is not None
         assert loaded_plan.tasks[0].status == TaskStatus.PASSED
@@ -263,41 +291,55 @@ class TestF3FaultInjection:
         assert p._get_plan_path(run_id).exists()
         assert _read_json(p._get_plan_path(run_id))["tasks"][0]["status"] == "PASSED"
 
-    def test_failure_during_authoritative_commit(self, tmp_persistence):
-        """A crash during the authoritative state.json commit (atomic write) does
-        not leave a partial/corrupt authoritative file; the previous
-        authoritative snapshot remains intact."""
+    def test_failure_during_authoritative_commit(self, tmp_persistence, monkeypatch):
+        """Inject a real failure DURING the authoritative state.json write: the
+        atomic write raises before state.json is replaced, so the PREVIOUS
+        authoritative snapshot remains intact and authoritative. The newer
+        state is NOT committed."""
         p = tmp_persistence
         run_id = "run-during-state-001"
         p.create_run(run_id)
 
-        # First, commit a valid authoritative snapshot.
+        # First, commit a valid authoritative snapshot (v1).
         plan_v1 = _make_plan(run_id, "Goal v1")
         state_v1 = _make_state(run_id, plan_v1, status=RunStatus.PLANNED)
         p.commit_run_state(state_v1)
 
-        # Attempt a second commit but simulate a crash DURING the atomic write
-        # by corrupting state.json directly (atomic write would have left the
-        # previous file intact; here we model a torn write as corruption).
-        # The atomic temp+rename guarantees no partial file; so we model the
-        # "during commit" failure as the write failing entirely, leaving v1.
+        # Now attempt a second commit (v2) but inject a failure on the FIRST
+        # write (state.json), so v2 is never committed.
         plan_v2 = _make_plan(run_id, "Goal v2")
         state_v2 = _make_state(run_id, plan_v2, status=RunStatus.RUNNING)
         state_v2.plan.tasks[0].status = TaskStatus.RUNNING
 
-        # Force the authoritative write to fail by making the path unwritable
-        # via a monkeypatched atomic_write that raises. We simulate by writing
-        # a corrupt state.json (modeling a torn write that atomic rename
-        # prevents in practice), then verify recovery rejects the corruption
-        # and does NOT fabricate from plan.json.
-        # Actually: atomic write prevents corruption. So the realistic "during
-        # commit" failure is that the write simply does not happen. Verify the
-        # previous authoritative snapshot survives:
-        # (state_v1 remains valid and authoritative)
+        call_count = {"n": 0}
+        original = p._atomic_write_json
+
+        def failing_write(path, data):
+            call_count["n"] += 1
+            # First write = state.json for v2. Inject failure (atomic write
+            # raises before os.replace, so the prior v1 state.json survives).
+            if call_count["n"] == 1:
+                raise PersistenceError(
+                    message="injected authoritative write failure",
+                    path=str(path),
+                    operation="injected",
+                )
+            return original(path, data)
+
+        monkeypatch.setattr(p, "_atomic_write_json", failing_write)
+        with pytest.raises(PersistenceError):
+            p.commit_run_state(state_v2)
+
+        monkeypatch.undo()
+        # The previous authoritative snapshot (v1) remains intact and
+        # authoritative; v2 was never committed.
         loaded = p.load_run_state(run_id)
         assert loaded.goal == "Goal v1"
         assert loaded.status == RunStatus.PLANNED
         assert loaded.plan.tasks[0].status == TaskStatus.PENDING
+        # The derived plan.json still reflects v1 (the failed commit never
+        # reached the derived write).
+        assert _read_json(p._get_plan_path(run_id))["goal"] == "Goal v1"
 
     def test_preparation_and_retry_transition_crash_consistency(self, tmp_persistence):
         """A preparation transition (PENDING -> READY -> RUNNING) and a retry
@@ -379,6 +421,64 @@ class TestF3FaultInjection:
         assert recovered.plan.tasks[0].attempt == 2
         assert recovered.plan.tasks[0].max_attempts == 3
         assert before.plan.tasks[0].attempt == recovered.plan.tasks[0].attempt
+
+    def test_crash_between_state_and_plan_leaves_consistent_recovery(
+        self, tmp_persistence, monkeypatch
+    ):
+        """End-to-end crash between the authoritative state write and the
+        derived plan write: after recovery, state.json and plan.json must
+        describe the SAME logical state (no contradiction)."""
+        p = tmp_persistence
+        run_id = "run-crash-mid-001"
+        p.create_run(run_id)
+        # Commit v1 (RUNNING, task PASSED).
+        plan = _make_plan(run_id, "Crash mid goal")
+        state = _make_state(run_id, plan, status=RunStatus.RUNNING)
+        state.plan.tasks[0].status = TaskStatus.PASSED
+        p.commit_run_state(state)
+
+        # Now commit a v2 (task FAILED) but crash AFTER state.json is written
+        # and BEFORE plan.json is written. This leaves a stale plan.json (still
+        # PASSED) that contradicts the authoritative state.json (FAILED).
+        state_v2 = _make_state(run_id, plan, status=RunStatus.RUNNING)
+        state_v2.plan.tasks[0].status = TaskStatus.FAILED
+
+        call_count = {"n": 0}
+        original = p._atomic_write_json
+
+        def failing_write(path, data):
+            call_count["n"] += 1
+            if call_count["n"] == 2:  # plan.json write for v2
+                raise PersistenceError(
+                    message="injected derived-view crash",
+                    path=str(path),
+                    operation="injected",
+                )
+            return original(path, data)
+
+        monkeypatch.setattr(p, "_atomic_write_json", failing_write)
+        with pytest.raises(PersistenceError):
+            p.commit_run_state(state_v2)
+        monkeypatch.undo()
+
+        # Disk now has authoritative state.json = FAILED (v2) and stale
+        # plan.json = PASSED (v1). This is the contradictory pair F3 forbids
+        # treating as two authorities.
+        state_disk = _read_json(p._get_state_path(run_id))
+        plan_disk = _read_json(p._get_plan_path(run_id))
+        assert state_disk["plan"]["tasks"][0]["status"] == "FAILED"
+        assert plan_disk["tasks"][0]["status"] == "PASSED"
+
+        # load_plan must return the AUTHORITATIVE plan (FAILED), not the stale
+        # derived plan.json (PASSED) — no contradictory snapshot.
+        loaded_plan = p.load_plan(run_id)
+        loaded_state = p.load_run_state(run_id)
+        assert loaded_plan.tasks[0].status == TaskStatus.FAILED
+        assert loaded_plan.tasks[0].status == loaded_state.plan.tasks[0].status
+
+        # Recovery repairs plan.json from the authoritative state.json.
+        p.recover_run(run_id)
+        assert _read_json(p._get_plan_path(run_id))["tasks"][0]["status"] == "FAILED"
 
 
 class TestF3F4F5Integration:
@@ -475,6 +575,7 @@ class TestF3NormalPathUnchanged:
             persist_retry_state_activity,
             validate_and_apply_human_decision_activity,
             persist_final_m4_state_activity,
+            persist_human_gate_rejections_activity,
             persist_initial_state_activity,
         )
         from fsasm.planner_activities import plan_activity
@@ -508,6 +609,7 @@ class TestF3NormalPathUnchanged:
             transition_to_needs_human_activity,
             validate_and_apply_human_decision_activity,
             persist_final_m4_state_activity,
+            persist_human_gate_rejections_activity,
         ]
 
         persistence = RuntimePersistence()

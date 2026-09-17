@@ -58,6 +58,7 @@ from workflows.fsasm_milestone_four import (
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
 )
 from fsasm.planner_activities import plan_activity
 
@@ -80,6 +81,7 @@ _M4_ACTIVITIES = [
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     persist_final_m4_state_activity,
+    persist_human_gate_rejections_activity,
 ]
 
 
