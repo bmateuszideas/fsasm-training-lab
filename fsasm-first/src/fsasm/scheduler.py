@@ -143,10 +143,16 @@ def schedule(state: RunState) -> ScheduleResult:
     if all_required_tasks_complete(state):
         return ScheduleResult(outcome=ScheduleOutcome.ALL_COMPLETE)
 
+    # A task is eligible to be activated once its dependencies are PASSED.
+    # Both PENDING (needs TaskReadied first) and READY (already readied, e.g.
+    # after a retry FAILED->READY) tasks with satisfied deps qualify; the run
+    # emits TaskReadied only for PENDING candidates. Deterministic sequence,
+    # then task_id tie-break.
     candidates = [
         t
         for t in state.plan.tasks
-        if t.status is TaskStatus.PENDING and _dependencies_satisfied(t, completed)
+        if t.status in (TaskStatus.PENDING, TaskStatus.READY)
+        and _dependencies_satisfied(t, completed)
     ]
     if candidates:
         candidates.sort(key=lambda t: (t.sequence, t.task_id))
