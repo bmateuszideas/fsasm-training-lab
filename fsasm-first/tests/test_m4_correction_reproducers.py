@@ -119,14 +119,22 @@ class TestBlocker1FutureGatePreAuthorization:
         )
 
         future_gate = _gate_id("run-b1", "TASK-001", 2)
-        # A decision explicitly targeting the FUTURE gate 2 must be rejected,
-        # not accepted into accepted_decisions for later automatic
-        # consumption.
+        # A complete-ID decision explicitly targeting the FUTURE gate 2 must be
+        # rejected, not accepted into accepted_decisions for later automatic
+        # consumption. T03 requires full IDs at the boundary, so the signal
+        # carries run_id/gate_id/decision_id for the future gate; it is rejected
+        # as wrong_gate (not incomplete_payload).
+        from src.workflows.fsasm_milestone_four import _decision_id
+
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id="run-b1",
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
                 gate_id=future_gate,
+                decision_id=_decision_id(
+                    "run-b1", "TASK-001", future_gate, HumanDecisionAction.RETRY_ONCE
+                ),
             )
         )
 
@@ -146,19 +154,28 @@ class TestBlocker1FutureGatePreAuthorization:
             run_id="run-b1", task_id="TASK-001", gate_id=gate2, attempt=1
         )
 
-        # A signal for a different run must be rejected (wrong-run) and must
-        # not terminate the workflow (no exception raised).
-        wrong_run_future = _gate_id("run-OTHER", "TASK-001", 1)
+        # A complete-ID signal for a different run must be rejected
+        # (wrong-run) and must not terminate the workflow (no exception).
+        # T03 requires full IDs. To reach the wrong_run check, the gate_id must
+        # match the OPEN gate (run-b1's gate) while run_id differs; a signal
+        # carrying the other run's gate_id would be caught earlier as
+        # wrong_gate.
+        from src.workflows.fsasm_milestone_four import _decision_id
+
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id="run-OTHER",
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
-                gate_id=wrong_run_future,
+                gate_id=gate2,
+                decision_id=_decision_id(
+                    "run-OTHER", "TASK-001", gate2, HumanDecisionAction.RETRY_ONCE
+                ),
             )
         )
         # No exception (workflow not terminated); signal rejected.
         assert len(wf.accepted_decisions) == 0
-        assert any(r["reason"] == "wrong_gate" for r in wf.pending_rejections)
+        assert any(r["reason"] == "wrong_run" for r in wf.pending_rejections)
 
 
 class TestBlocker2EarlyLegacySignalLoss:
@@ -188,15 +205,31 @@ class TestBlocker2EarlyLegacySignalLoss:
             run_id="run-b2", task_id="TASK-001", gate_id=gate3, attempt=1
         )
 
-        # A valid legacy signal arrives (task_id + action, no gate_id).
+        # T03 / policy 1: a legacy payload (no IDs) is rejected as
+        # incomplete_payload even with the gate open; a complete-ID signal
+        # for the open gate is preserved, never lost.
+        from src.workflows.fsasm_milestone_four import _decision_id
+
         await wf.receive_human_decision(
             HumanDecisionSignal(
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
             )
         )
-
-        # The signal must NOT have been lost: it is accepted for the open gate.
+        assert gate3 not in wf.accepted_decisions
+        assert any(r["reason"] == "incomplete_payload" for r in wf.pending_rejections)
+        # A complete-ID signal for the open gate must be accepted (not lost).
+        await wf.receive_human_decision(
+            HumanDecisionSignal(
+                run_id="run-b2",
+                task_id="TASK-001",
+                action=HumanDecisionAction.RETRY_ONCE,
+                gate_id=gate3,
+                decision_id=_decision_id(
+                    "run-b2", "TASK-001", gate3, HumanDecisionAction.RETRY_ONCE
+                ),
+            )
+        )
         assert gate3 in wf.accepted_decisions
         accepted = wf.accepted_decisions[gate3]
         assert accepted.action == HumanDecisionAction.RETRY_ONCE
@@ -205,18 +238,40 @@ class TestBlocker2EarlyLegacySignalLoss:
 
     @pytest.mark.asyncio
     async def test_legacy_signal_before_any_gate_rejected_not_lost_silently(self):
-        """A legacy signal arriving before any gate is open (current_gate_id is
-        None) is rejected as no_open_gate (not silently buffered for a future
-        gate). This is the correct behavior: the workflow registers the gate
-        before persistence, so a real signal always finds an open gate. A
-        signal with no gate before any gate is a genuinely early/invalid
-        signal, explicitly rejected."""
+        """A complete-ID signal arriving before any gate is open
+        (current_gate_id is None) is rejected as no_open_gate (not silently
+        buffered for a future gate), while a legacy payload (no IDs) is
+        rejected as incomplete_payload. The workflow registers the gate before
+        persistence, so a real signal always finds an open gate."""
         wf = FsasmMilestoneFourWorkflow()
         assert wf.current_gate_id is None
+        # Legacy payload (no IDs) is rejected as incomplete_payload before the
+        # no_open_gate check.
         await wf.receive_human_decision(
             HumanDecisionSignal(
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
+            )
+        )
+        assert any(r["reason"] == "incomplete_payload" for r in wf.pending_rejections)
+        assert len(wf.accepted_decisions) == 0
+        # A complete-ID signal before any gate is explicitly rejected as
+        # no_open_gate (auditable, not silently buffered).
+        from src.workflows.fsasm_milestone_four import _decision_id
+
+        future_gate = _gate_id("run-b2", "TASK-001", 1)
+        await wf.receive_human_decision(
+            HumanDecisionSignal(
+                run_id="run-b2",
+                task_id="TASK-001",
+                action=HumanDecisionAction.RETRY_ONCE,
+                gate_id=future_gate,
+                decision_id=_decision_id(
+                    "run-b2",
+                    "TASK-001",
+                    future_gate,
+                    HumanDecisionAction.RETRY_ONCE,
+                ),
             )
         )
         # Explicitly rejected (auditable), not silently buffered.

@@ -9,13 +9,16 @@ in-memory buffer and the inner rejection record; the audit (§5.5) explicitly
 notes those assertions are too weak to detect G4/G5. These reproducers target
 the precise mechanisms:
 
-- G3: a legacy signal without gate_id/decision_id is keyed into
-  `accepted_decisions` under the *current* gate. After that gate closes and a
-  new gate opens, the same unmarked payload is accepted *again* as a new
+- G3: a legacy signal without gate_id/decision_id was keyed into
+  `accepted_decisions` under the *current* gate. After that gate closed and a
+  new gate opened, the same unmarked payload was accepted *again* as a new
   decision for the new gate (re-authorization), because nothing binds the first
-  consent to the first gate occurrence. **Still PRESENT** as of T02 (G3 is the
-  scope of T03, which additionally requires a user decision on legacy payload
-  policy). The G3 reproducer below asserts PRESENT.
+  consent to the first gate occurrence. **Fixed by T03 / policy 1** — the handler
+  now rejects any payload missing run_id/gate_id/decision_id as
+  `incomplete_payload` before reserving a gate, so an unmarked consent can
+  never authorize any gate occurrence. The G3 reproducer below asserts the
+  FIXED contract (ABSENT) and is a regression guard; a complete-ID payload for
+  the open gate is still accepted.
 
 - G4: `_flush_pending_rejections` previously passed
   `tag if tag is not None else gate_id` to
@@ -84,13 +87,15 @@ def _close_gate(wf: FsasmMilestoneFourWorkflow) -> None:
 
 
 class TestG3LegacyConsentReassignedAcrossGates:
-    """Reproduce the audit G3: the same legacy payload (no gate_id, no
-    decision_id) is accepted for gate-1 and, after gate closure and a new gate
-    opening, accepted again for gate-2. The observation is whether the second
-    acceptance occurs."""
+    """G3 regression guard (fixed by T03 / policy 1): a legacy payload without
+    gate_id/decision_id/run_id is rejected as ``incomplete_payload`` for BOTH
+    gate-1 and gate-2, so an unmarked consent can never authorize (or
+    re-authorize) any gate occurrence. PRESENT would mean the legacy consent
+    was accepted/re-assigned again. A complete-ID payload for the open gate is
+    still accepted (legitimate path preserved)."""
 
     @pytest.mark.asyncio
-    async def test_g3_legacy_payload_accepted_for_two_distinct_gates(self):
+    async def test_g3_legacy_payload_rejected_for_both_gates(self):
         wf = FsasmMilestoneFourWorkflow()
         run_id = "run-g3"
         task_id = "TASK-001"
@@ -103,46 +108,60 @@ class TestG3LegacyConsentReassignedAcrossGates:
         )
         await wf.receive_human_decision(legacy)
 
-        assert gate1 in wf.accepted_decisions, (
-            "Setup precondition: legacy payload must be accepted for gate-1"
+        # Legacy payload must NOT be accepted for gate-1 (incomplete_payload).
+        gate1_accepted = gate1 in wf.accepted_decisions
+        gate1_rejected = any(
+            r.get("reason") == "incomplete_payload" for r in wf.pending_rejections
         )
-        accepted_for_gate1 = wf.accepted_decisions[gate1]
-        assert accepted_for_gate1.gate_id == gate1
-        first_decision_id = accepted_for_gate1.decision_id
 
-        # Simulate gate-1 closure (the workflow removes the entry after applying).
+        # Simulate gate-1 closure and gate-2 opening.
         wf.accepted_decisions.pop(gate1, None)
         _close_gate(wf)
-
         gate2 = _open_gate(wf, run_id, task_id, attempt=2)
         assert gate2 != gate1
 
-        # Re-send the IDENTICAL legacy payload (same task_id/action/reason, no IDs).
+        # Re-send the IDENTICAL legacy payload (no IDs).
         await wf.receive_human_decision(legacy)
-
-        g3_present = gate2 in wf.accepted_decisions
-        second_decision = wf.accepted_decisions.get(gate2)
-        g3_new_decision_id = (
-            second_decision is not None
-            and second_decision.decision_id != first_decision_id
+        gate2_accepted = gate2 in wf.accepted_decisions
+        gate2_rejected_after = any(
+            r.get("reason") == "incomplete_payload" for r in wf.pending_rejections
         )
 
-        result = "PRESENT" if g3_present else "ABSENT"
+        # A complete-ID payload for the open gate-2 is still accepted.
+        complete = HumanDecisionSignal(
+            run_id=run_id,
+            task_id=task_id,
+            action=HumanDecisionAction.RETRY_ONCE,
+            reason="complete consent",
+            gate_id=gate2,
+            decision_id=f"decision-{run_id}-{task_id}-{gate2}-RETRY_ONCE",
+        )
+        await wf.receive_human_decision(complete)
+        complete_accepted = gate2 in wf.accepted_decisions
+
+        g3_absent = (
+            not gate1_accepted
+            and not gate2_accepted
+            and gate1_rejected
+            and gate2_rejected_after
+            and complete_accepted
+        )
+        result = "ABSENT" if g3_absent else "PRESENT"
         detail = {
             "gate1": gate1,
             "gate2": gate2,
-            "accepted_for_gate1_id": first_decision_id,
-            "gate2_in_accepted_decisions": g3_present,
-            "gate2_decision_id": getattr(second_decision, "decision_id", None),
-            "gate2_decision_id_is_new": g3_new_decision_id,
+            "gate1_accepted": gate1_accepted,
+            "gate2_accepted": gate2_accepted,
+            "gate1_incomplete_rejected": gate1_rejected,
+            "gate2_incomplete_rejected": gate2_rejected_after,
+            "complete_payload_accepted": complete_accepted,
             "accepted_decisions_keys": list(wf.accepted_decisions.keys()),
         }
-        # Record the outcome explicitly; never assert a "corrected" contract here.
         print(f"\n[G3] result={result} detail={detail}")
-        assert g3_present, (
-            "G3 ABSENT on this HEAD: the identical legacy payload was NOT "
-            "re-accepted for gate-2. If this fires, G3 has been fixed and the "
-            "report should record ABSENT."
+        assert g3_absent, (
+            "G3 PRESENT on this HEAD: a legacy payload without IDs was "
+            "accepted (or re-accepted) for a gate, or the complete-ID path "
+            "broke."
         )
 
 
@@ -163,13 +182,19 @@ class TestG4NoOpenGateRejectionMisattributedEnvelope:
         run_id = "run-g4"
         task_id = "TASK-001"
 
-        # 1) A signal arrives while NO gate is open -> no_open_gate rejection
-        #    with its own gate_id == None.
+        # 1) A complete-ID signal arrives while NO gate is open. It passes the
+        #    incomplete_payload check (full IDs) but is rejected as no_open_gate
+        #    (current_gate is None); the rejection is recorded with its own gate
+        #    tag None (current_gate_id is None when no gate is open).
+        future_gate = _gate_id(run_id, task_id, 1)
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id=run_id,
                 task_id=task_id,
                 action=HumanDecisionAction.RETRY_ONCE,
                 reason="before gate",
+                gate_id=future_gate,
+                decision_id=f"decision-{run_id}-{task_id}-{future_gate}-RETRY_ONCE",
             )
         )
         assert wf.current_gate is None

@@ -42,6 +42,7 @@ from src.workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
     HumanDecisionSignal,
     OpenGate,
+    _decision_id,
     validate_and_apply_human_decision_activity,
 )
 
@@ -130,14 +131,29 @@ class TestF6F7ReproductionConflictingSignals:
             run_id="run-gate-001", task_id="TASK-001", gate_id=gate, attempt=1
         )
 
-        # Send ABORT first.
-        await wf.receive_human_decision(
-            HumanDecisionSignal(task_id="TASK-001", action=HumanDecisionAction.ABORT)
-        )
-        # Send RETRY_ONCE before the first is consumed.
+        # Send ABORT first (full IDs for the open gate).
         await wf.receive_human_decision(
             HumanDecisionSignal(
-                task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                run_id="run-gate-001",
+                task_id="TASK-001",
+                action=HumanDecisionAction.ABORT,
+                gate_id=gate,
+                decision_id=_decision_id(
+                    "run-gate-001", "TASK-001", gate, HumanDecisionAction.ABORT
+                ),
+            )
+        )
+        # Send RETRY_ONCE before the first is consumed (full IDs, same gate but
+        # a distinct decision_id so it is a conflicting submission).
+        await wf.receive_human_decision(
+            HumanDecisionSignal(
+                run_id="run-gate-001",
+                task_id="TASK-001",
+                action=HumanDecisionAction.RETRY_ONCE,
+                gate_id=gate,
+                decision_id=_decision_id(
+                    "run-gate-001", "TASK-001", gate, HumanDecisionAction.RETRY_ONCE
+                ),
             )
         )
 

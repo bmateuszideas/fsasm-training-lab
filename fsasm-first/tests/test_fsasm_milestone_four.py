@@ -62,7 +62,6 @@ from fsasm.transitions import transition_task
 from workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
     WorkflowInput,
-    HumanDecisionSignal,
     create_input_activity,
     validate_config_activity,
     find_next_ready_task_activity,
@@ -919,7 +918,7 @@ class TestScenarioBWorker:
         persistence.cleanup_all()
 
     @pytest.mark.asyncio
-    async def test_scenario_b_worker_level(self, temporal_env):
+    async def test_scenario_b_worker_level(self, temporal_env, full_decision_signal):
         """
         Scenario B: Exhaustion -> Human Gate -> ABORT using real test worker.
         Tests observe NEEDS_HUMAN state before sending signal.
@@ -1002,12 +1001,14 @@ class TestScenarioBWorker:
                 "Human Gate state (NEEDS_HUMAN for both task and run) was not observed before signal"
             )
 
-            # Now send ABORT signal
+            # Now send ABORT signal (full IDs: attempt 2 reached the gate).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.ABORT,
+                full_decision_signal(
+                    test_run_id,
+                    "TASK-001",
+                    2,
+                    HumanDecisionAction.ABORT,
                     reason="Test ABORT",
                 ),
             )
@@ -1112,7 +1113,7 @@ class TestScenarioCWorker:
         persistence.cleanup_all()
 
     @pytest.mark.asyncio
-    async def test_scenario_c_worker_level(self, temporal_env):
+    async def test_scenario_c_worker_level(self, temporal_env, full_decision_signal):
         """
         Scenario C: Exhaustion -> Human Gate -> RETRY_ONCE -> PASS using real test worker.
         Tests observe NEEDS_HUMAN state before sending signal.
@@ -1193,12 +1194,14 @@ class TestScenarioCWorker:
                 "Human Gate state (NEEDS_HUMAN for both task and run) was not observed before signal"
             )
 
-            # Now send RETRY_ONCE signal
+            # Now send RETRY_ONCE signal (full IDs: attempt 1 reached the gate).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    test_run_id,
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     reason="Give it one more try",
                 ),
             )
@@ -1400,7 +1403,7 @@ class TestSignalCannotBeLost:
 
     @pytest.mark.asyncio
     async def test_signal_sent_immediately_after_needs_human_not_lost(
-        self, temporal_env
+        self, temporal_env, full_decision_signal
     ):
         """
         Test that signal sent immediately after observing NEEDS_HUMAN is not lost.
@@ -1483,12 +1486,15 @@ class TestSignalCannotBeLost:
             )
 
             # Send ABORT signal immediately after observing NEEDS_HUMAN
-            # This signal may arrive before workflow code reaches wait_condition()
+            # (full IDs: attempt 1 reached the gate). This signal may arrive
+            # before workflow code reaches wait_condition().
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.ABORT,
+                full_decision_signal(
+                    test_run_id,
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.ABORT,
                     reason="Test ABORT immediately after NEEDS_HUMAN",
                 ),
             )
@@ -1571,7 +1577,7 @@ class TestRetryOnceRegressionWorker:
 
     @pytest.mark.asyncio
     async def test_retry_once_authorizes_exactly_one_additional_execution(
-        self, temporal_env
+        self, temporal_env, full_decision_signal
     ):
         """
         Regression test: RETRY_ONCE authorizes exactly one additional execution.
@@ -1661,12 +1667,14 @@ class TestRetryOnceRegressionWorker:
                 "Human Gate #1 state was not observed before first signal"
             )
 
-            # Send RETRY_ONCE signal
+            # Send RETRY_ONCE signal (full IDs: attempt 1 reached gate 1).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    test_run_id,
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     reason="Give it one more try",
                 ),
             )
@@ -1704,12 +1712,15 @@ class TestRetryOnceRegressionWorker:
                 "max_attempts should be exactly 2"
             )
 
-            # Now send ABORT signal to finish the test
+            # Now send ABORT signal to finish the test (full IDs: attempt 2
+            # reached gate 2).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.ABORT,
+                full_decision_signal(
+                    test_run_id,
+                    "TASK-001",
+                    2,
+                    HumanDecisionAction.ABORT,
                     reason="No more retries",
                 ),
             )

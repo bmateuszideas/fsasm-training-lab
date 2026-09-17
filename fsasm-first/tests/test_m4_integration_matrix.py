@@ -17,11 +17,10 @@ import pytest
 from mistralai.workflows.testing import create_test_worker
 
 from fsasm.errors import InvalidIdentifierError
-from fsasm.models import RunStatus, TaskStatus
+from fsasm.models import HumanDecisionAction, RunStatus, TaskStatus
 from fsasm.persistence import RuntimePersistence
 from src.workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
-    HumanDecisionSignal,
     check_retry_budget_activity,
     create_input_activity,
     find_next_ready_task_activity,
@@ -214,7 +213,9 @@ class TestM4IntegrationMatrix:
         assert plan.tasks[0].status == TaskStatus.NEEDS_HUMAN
 
     @pytest.mark.asyncio
-    async def test_human_abort_correct_failed_result_and_audit(self, temporal_env):
+    async def test_human_abort_correct_failed_result_and_audit(
+        self, temporal_env, full_decision_signal
+    ):
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneFourWorkflow],
@@ -224,7 +225,9 @@ class TestM4IntegrationMatrix:
             await _wait_needs_human("run-int-abort")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(task_id="TASK-001", action="ABORT"),
+                full_decision_signal(
+                    "run-int-abort", "TASK-001", 1, HumanDecisionAction.ABORT
+                ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
         assert result["status"] == "FAILED"
@@ -250,7 +253,7 @@ class TestM4IntegrationMatrix:
 
     @pytest.mark.asyncio
     async def test_human_retry_once_exactly_one_additional_execution(
-        self, temporal_env
+        self, temporal_env, full_decision_signal
     ):
         async with create_test_worker(
             temporal_env,
@@ -261,7 +264,9 @@ class TestM4IntegrationMatrix:
             await _wait_needs_human("run-int-retry1")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(task_id="TASK-001", action="RETRY_ONCE"),
+                full_decision_signal(
+                    "run-int-retry1", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
+                ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
         assert result["success"] is True

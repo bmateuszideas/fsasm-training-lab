@@ -53,6 +53,7 @@ from src.workflows.fsasm_milestone_four import (
     transition_to_needs_human_activity,
     validate_and_apply_human_decision_activity,
     validate_config_activity,
+    _decision_id,
     _gate_id,
 )
 from fsasm.planner_activities import plan_activity
@@ -141,10 +142,12 @@ def _rejection_log_entries(run_id):
 
 
 class TestD2DuplicateIdenticalActionDifferentReason:
-    """Two legacy signals (decision_id=None) with the same action but a
-    different ``reason`` must NOT be treated as an identical no-op duplicate.
-    The first VALID decision wins; the contradictory second submission is
-    recorded as rejected (``conflicting_signal_rejected_first_wins``)."""
+    """Two complete-ID signals with the same action but a different ``reason``
+    (and therefore a different decision_id) must NOT be treated as an identical
+    no-op duplicate. The first VALID decision wins; the contradictory second
+    submission is recorded as rejected (``conflicting_signal_rejected_first_wins``).
+    T03 requires full IDs at the boundary, so legacy payloads are rejected as
+    incomplete_payload before reaching the duplicate/conflict path."""
 
     @pytest.mark.asyncio
     async def test_same_action_different_reason_recorded_rejected(self):
@@ -156,16 +159,29 @@ class TestD2DuplicateIdenticalActionDifferentReason:
         )
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id="run-d2",
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
                 reason="first reason",
+                gate_id=gate,
+                decision_id=_decision_id(
+                    "run-d2", "TASK-001", gate, HumanDecisionAction.RETRY_ONCE
+                ),
             )
         )
+        # Same action, different reason -> a distinct decision_id, so it is a
+        # contradictory submission, not an identical duplicate.
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id="run-d2",
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
                 reason="second different reason",
+                gate_id=gate,
+                decision_id=_decision_id(
+                    "run-d2", "TASK-001", gate, HumanDecisionAction.RETRY_ONCE
+                )
+                + "-v2",
             )
         )
         assert gate in wf.accepted_decisions
@@ -175,7 +191,7 @@ class TestD2DuplicateIdenticalActionDifferentReason:
             r["reason"] == "conflicting_signal_rejected_first_wins"
             for r in wf.pending_rejections
         ), (
-            "Pre-fix defect: a legacy signal with the same action but a "
+            "Pre-fix defect: a signal with the same action but a "
             "different reason was silently treated as an identical duplicate "
             "instead of recording the contradictory submission as rejected."
         )
@@ -195,11 +211,23 @@ class TestD6RejectionBeforeFirstGate:
     async def test_pre_gate_signal_recorded_no_open_gate(self):
         wf = FsasmMilestoneFourWorkflow()
         assert wf.current_gate is None
+        # T03: a complete-ID signal before any gate is rejected as
+        # no_open_gate (gate tag None); a legacy payload would be rejected
+        # earlier as incomplete_payload.
+        gate_future = _gate_id("run-d6pre", "TASK-001", 1)
         await wf.receive_human_decision(
             HumanDecisionSignal(
+                run_id="run-d6pre",
                 task_id="TASK-001",
                 action=HumanDecisionAction.RETRY_ONCE,
                 reason="early",
+                gate_id=gate_future,
+                decision_id=_decision_id(
+                    "run-d6pre",
+                    "TASK-001",
+                    gate_future,
+                    HumanDecisionAction.RETRY_ONCE,
+                ),
             )
         )
         assert len(wf.accepted_decisions) == 0
@@ -226,7 +254,7 @@ class TestD1RejectionDuringApplication:
 
     @pytest.mark.asyncio
     async def test_conflict_during_application_durable_audit(
-        self, temporal_env, monkeypatch
+        self, temporal_env, monkeypatch, full_decision_signal
     ):
         fired = {"during": False}
         orig_commit = RuntimePersistence.commit_run_state
@@ -236,13 +264,19 @@ class TestD1RejectionDuringApplication:
             if state.status == RunStatus.RUNNING and not fired["during"]:
                 fired["during"] = True
                 loop = asyncio.get_event_loop()
+                gate1 = _gate_id("run-d1", "TASK-001", 1)
                 asyncio.run_coroutine_threadsafe(
                     handle_ref["h"].signal(
                         FsasmMilestoneFourWorkflow.receive_human_decision,
                         HumanDecisionSignal(
+                            run_id="run-d1",
                             task_id="TASK-001",
                             action=HumanDecisionAction.ABORT,
                             reason="conflict during application",
+                            gate_id=gate1,
+                            decision_id=_decision_id(
+                                "run-d1", "TASK-001", gate1, HumanDecisionAction.ABORT
+                            ),
                         ),
                     ),
                     loop,
@@ -263,9 +297,11 @@ class TestD1RejectionDuringApplication:
             await _wait_for_needs_human("run-d1")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    "run-d1",
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     reason="first",
                 ),
             )
@@ -345,7 +381,9 @@ class TestD3IdempotentRejectionPersistence:
     Exactly-once across crashes is NOT claimed (no durable dedup store)."""
 
     @pytest.mark.asyncio
-    async def test_replayed_flush_does_not_duplicate(self, temporal_env, monkeypatch):
+    async def test_replayed_flush_does_not_duplicate(
+        self, temporal_env, monkeypatch, full_decision_signal
+    ):
         rejection_log_writes = {"n": 0}
         orig_save = RuntimePersistence.save_run_log_entry
 
@@ -368,16 +406,20 @@ class TestD3IdempotentRejectionPersistence:
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
                 HumanDecisionSignal(
+                    run_id="run-d3",
                     task_id="TASK-999",
                     action=HumanDecisionAction.RETRY_ONCE,
                     gate_id=gate,
+                    decision_id=_decision_id(
+                        "run-d3", "TASK-999", gate, HumanDecisionAction.RETRY_ONCE
+                    ),
                 ),
             )
             await asyncio.sleep(0.4)
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                full_decision_signal(
+                    "run-d3", "TASK-001", 1, HumanDecisionAction.ABORT
                 ),
             )
             await asyncio.wait_for(handle.result(), timeout=30)
@@ -416,7 +458,9 @@ class TestD6RejectionBetweenGates:
     id. It must be durably audited under its own gate tag (None)."""
 
     @pytest.mark.asyncio
-    async def test_between_gate_rejection_not_misattributed(self, temporal_env):
+    async def test_between_gate_rejection_not_misattributed(
+        self, temporal_env, full_decision_signal
+    ):
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneFourWorkflow],
@@ -428,8 +472,8 @@ class TestD6RejectionBetweenGates:
             gate1 = _gate_id("run-d6bg", "TASK-001", 1)
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-d6bg", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             await asyncio.sleep(0.2)
@@ -438,8 +482,8 @@ class TestD6RejectionBetweenGates:
             assert gate2 != gate1
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                full_decision_signal(
+                    "run-d6bg", "TASK-001", 2, HumanDecisionAction.ABORT
                 ),
             )
             await asyncio.wait_for(handle.result(), timeout=30)

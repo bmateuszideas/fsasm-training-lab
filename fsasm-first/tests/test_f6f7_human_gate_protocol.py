@@ -36,7 +36,6 @@ from fsasm.models import (
 from fsasm.persistence import RuntimePersistence
 from src.workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
-    HumanDecisionSignal,
     check_retry_budget_activity,
     create_input_activity,
     find_next_ready_task_activity,
@@ -267,7 +266,9 @@ class TestF6F7WorkerLevelScenarios:
         assert result["human_gate_invoked"] is False
 
     @pytest.mark.asyncio
-    async def test_3_retry_exhaustion_then_abort(self, temporal_env):
+    async def test_3_retry_exhaustion_then_abort(
+        self, temporal_env, full_decision_signal
+    ):
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneFourWorkflow],
@@ -279,8 +280,8 @@ class TestF6F7WorkerLevelScenarios:
             await _wait_for_needs_human(temporal_env, "run-sc3")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                full_decision_signal(
+                    "run-sc3", "TASK-001", 1, HumanDecisionAction.ABORT
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -288,7 +289,9 @@ class TestF6F7WorkerLevelScenarios:
         assert result["human_decision"]["action"] == "ABORT"
 
     @pytest.mark.asyncio
-    async def test_4_retry_exhaustion_then_retry_once_success(self, temporal_env):
+    async def test_4_retry_exhaustion_then_retry_once_success(
+        self, temporal_env, full_decision_signal
+    ):
         async with create_test_worker(
             temporal_env,
             workflows=[FsasmMilestoneFourWorkflow],
@@ -301,8 +304,8 @@ class TestF6F7WorkerLevelScenarios:
             await _wait_for_needs_human(temporal_env, "run-sc4")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc4", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -310,7 +313,9 @@ class TestF6F7WorkerLevelScenarios:
         assert result["human_decision"]["action"] == "RETRY_ONCE"
 
     @pytest.mark.asyncio
-    async def test_5_retry_once_then_another_failure_distinct_gate(self, temporal_env):
+    async def test_5_retry_once_then_another_failure_distinct_gate(
+        self, temporal_env, full_decision_signal
+    ):
         """RETRY_ONCE authorizes one more execution; if it fails again, a new
         distinct gate opens for the same task."""
         async with create_test_worker(
@@ -324,8 +329,8 @@ class TestF6F7WorkerLevelScenarios:
             # Gate 1: RETRY_ONCE
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc5", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             await asyncio.sleep(0.2)
@@ -334,8 +339,8 @@ class TestF6F7WorkerLevelScenarios:
             # Gate 2: ABORT
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                full_decision_signal(
+                    "run-sc5", "TASK-001", 2, HumanDecisionAction.ABORT
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -343,7 +348,9 @@ class TestF6F7WorkerLevelScenarios:
         assert result["human_decision"]["action"] == "ABORT"
 
     @pytest.mark.asyncio
-    async def test_6_two_distinct_approvals_separately_auditable(self, temporal_env):
+    async def test_6_two_distinct_approvals_separately_auditable(
+        self, temporal_env, full_decision_signal
+    ):
         """Two distinct RETRY_ONCE decisions at two distinct gates must remain
         separately auditable (distinct gate_id / decision_id in evidence)."""
         async with create_test_worker(
@@ -358,16 +365,16 @@ class TestF6F7WorkerLevelScenarios:
             await _wait_for_needs_human(temporal_env, "run-sc6")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc6", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             await asyncio.sleep(0.2)
             await _wait_for_needs_human(temporal_env, "run-sc6")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc6", "TASK-001", 2, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -380,7 +387,9 @@ class TestF6F7WorkerLevelScenarios:
         assert len(gate_ids) == 2, f"expected 2 distinct gate_ids, got {gate_ids}"
 
     @pytest.mark.asyncio
-    async def test_7_duplicate_decision_one_application(self, temporal_env):
+    async def test_7_duplicate_decision_one_application(
+        self, temporal_env, full_decision_signal
+    ):
         """A duplicated delivery must not result in a duplicated domain
         transition or duplicated logical audit event."""
         async with create_test_worker(
@@ -396,8 +405,8 @@ class TestF6F7WorkerLevelScenarios:
             # passes. Duplicating the signal must not double-apply.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc7", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -410,7 +419,9 @@ class TestF6F7WorkerLevelScenarios:
         assert len(gate_audits) == 1
 
     @pytest.mark.asyncio
-    async def test_8_conflicting_decisions_no_overwrite(self, temporal_env):
+    async def test_8_conflicting_decisions_no_overwrite(
+        self, temporal_env, full_decision_signal
+    ):
         """Conflicting decisions do not overwrite the accepted decision
         (first-wins). Send ABORT then RETRY_ONCE before consumption; ABORT
         must win and the run must end FAILED."""
@@ -425,15 +436,15 @@ class TestF6F7WorkerLevelScenarios:
             # ABORT first.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                full_decision_signal(
+                    "run-sc8", "TASK-001", 1, HumanDecisionAction.ABORT
                 ),
             )
             # Conflicting RETRY_ONCE before consumption.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc8", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -448,7 +459,9 @@ class TestF6F7WorkerLevelScenarios:
         assert gate_audits[0].payload["action"] == "ABORT"
 
     @pytest.mark.asyncio
-    async def test_9_stale_gate_decision_rejected(self, temporal_env):
+    async def test_9_stale_gate_decision_rejected(
+        self, temporal_env, full_decision_signal
+    ):
         """A stale decision (earlier gate's identity) cannot authorize the next
         gate. Approve gate 1 (RETRY_ONCE), fail again to reach gate 2, then
         attempt to replay gate 1's decision_id. The stale signal must be
@@ -466,9 +479,11 @@ class TestF6F7WorkerLevelScenarios:
             gate1 = _gate_id("run-sc9", "TASK-001", 1)
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    "run-sc9",
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     gate_id=gate1,
                 ),
             )
@@ -480,9 +495,11 @@ class TestF6F7WorkerLevelScenarios:
             # Use the same gate_id=gate1 which no longer matches the open gate2.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    "run-sc9",
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     gate_id=gate1,
                 ),
             )
@@ -490,9 +507,11 @@ class TestF6F7WorkerLevelScenarios:
             # valid gate-2 ABORT.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.ABORT,
+                full_decision_signal(
+                    "run-sc9",
+                    "TASK-001",
+                    2,
+                    HumanDecisionAction.ABORT,
                     gate_id=gate2,
                 ),
             )
@@ -510,7 +529,9 @@ class TestF6F7WorkerLevelScenarios:
         assert gate2 in gate_ids
 
     @pytest.mark.asyncio
-    async def test_10_wrong_run_wrong_task_decision_rejected(self, temporal_env):
+    async def test_10_wrong_run_wrong_task_decision_rejected(
+        self, temporal_env, full_decision_signal
+    ):
         """A decision for the wrong run or wrong task is rejected without
         terminating the workflow. The valid gate then receives a correct
         decision and completes."""
@@ -526,9 +547,11 @@ class TestF6F7WorkerLevelScenarios:
             wrong_task_gate = _gate_id("run-sc10", "TASK-999", 1)
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-999",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    "run-sc10",
+                    "TASK-999",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     gate_id=wrong_task_gate,
                 ),
             )
@@ -536,18 +559,19 @@ class TestF6F7WorkerLevelScenarios:
             wrong_run_gate = _gate_id("run-OTHER", "TASK-001", 1)
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
-                    run_id="run-OTHER",
+                full_decision_signal(
+                    "run-OTHER",
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     gate_id=wrong_run_gate,
                 ),
             )
             # Workflow still waiting; send the correct decision.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc10", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -561,7 +585,9 @@ class TestF6F7WorkerLevelScenarios:
         assert len(gate_audits) == 1
 
     @pytest.mark.asyncio
-    async def test_11_valid_early_signal_preserved_worker(self, temporal_env):
+    async def test_11_valid_early_signal_preserved_worker(
+        self, temporal_env, full_decision_signal
+    ):
         """A valid signal arriving immediately after NEEDS_HUMAN persistence
         but before the workflow reaches its wait must be preserved (worker
         test). Because the workflow registers current_gate_id before
@@ -577,11 +603,11 @@ class TestF6F7WorkerLevelScenarios:
             # immediately (the precise post-persist/pre-wait window).
             state = await _wait_for_needs_human(temporal_env, "run-sc11")
             assert state.status == RunStatus.NEEDS_HUMAN
-            # Send the valid legacy signal right after persistence.
+            # Send the valid complete-ID signal right after persistence.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.RETRY_ONCE
+                full_decision_signal(
+                    "run-sc11", "TASK-001", 1, HumanDecisionAction.RETRY_ONCE
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -589,7 +615,9 @@ class TestF6F7WorkerLevelScenarios:
         assert result["human_decision"]["action"] == "RETRY_ONCE"
 
     @pytest.mark.asyncio
-    async def test_12_future_gate_pre_authorization_rejected(self, temporal_env):
+    async def test_12_future_gate_pre_authorization_rejected(
+        self, temporal_env, full_decision_signal
+    ):
         """A decision explicitly targeting a future (unopened) gate is rejected
         and cannot pre-authorize that gate. After the current gate is validly
         approved and the next gate opens, the pre-sent future decision is NOT
@@ -607,18 +635,22 @@ class TestF6F7WorkerLevelScenarios:
             # Pre-send a decision for the FUTURE gate 2 (must be rejected).
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    "run-sc12",
+                    "TASK-001",
+                    2,
+                    HumanDecisionAction.RETRY_ONCE,
                     gate_id=gate2,
                 ),
             )
             # Validly approve gate 1.
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001",
-                    action=HumanDecisionAction.RETRY_ONCE,
+                full_decision_signal(
+                    "run-sc12",
+                    "TASK-001",
+                    1,
+                    HumanDecisionAction.RETRY_ONCE,
                     gate_id=gate1,
                 ),
             )
@@ -628,8 +660,8 @@ class TestF6F7WorkerLevelScenarios:
             await _wait_for_needs_human(temporal_env, "run-sc12")
             await handle.signal(
                 FsasmMilestoneFourWorkflow.receive_human_decision,
-                HumanDecisionSignal(
-                    task_id="TASK-001", action=HumanDecisionAction.ABORT
+                full_decision_signal(
+                    "run-sc12", "TASK-001", 2, HumanDecisionAction.ABORT
                 ),
             )
             result = await asyncio.wait_for(handle.result(), timeout=30)

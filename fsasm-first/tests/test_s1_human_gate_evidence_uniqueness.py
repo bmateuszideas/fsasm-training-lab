@@ -34,7 +34,6 @@ import fsasm.executor_activities as exec_module
 import fsasm.planner_activities as plan_module
 from workflows.fsasm_milestone_four import (
     FsasmMilestoneFourWorkflow,
-    HumanDecisionSignal,
     HumanDecisionAction,
     create_input_activity,
     validate_config_activity,
@@ -151,7 +150,9 @@ async def _await_gate(persistence, run_id, expected_attempt, expected_max_attemp
 
 
 @pytest.mark.asyncio
-async def test_human_gate_evidence_id_uniqueness(isolated_runtime, temporal_env):
+async def test_human_gate_evidence_id_uniqueness(
+    isolated_runtime, temporal_env, full_decision_signal
+):
     """S1: two consecutive RETRY_ONCE decisions keep both audit records.
 
     Scenario (max_retries_per_task=0, stub_fail_first_n_attempts=999):
@@ -194,9 +195,11 @@ async def test_human_gate_evidence_id_uniqueness(isolated_runtime, temporal_env)
         assert observed, "Human Gate #1 (NEEDS_HUMAN, attempt=1) was not observed"
         await handle.signal(
             FsasmMilestoneFourWorkflow.receive_human_decision,
-            HumanDecisionSignal(
-                task_id="TASK-001",
-                action=HumanDecisionAction.RETRY_ONCE,
+            full_decision_signal(
+                test_run_id,
+                "TASK-001",
+                1,
+                HumanDecisionAction.RETRY_ONCE,
                 reason="first retry reason",
             ),
         )
@@ -206,9 +209,11 @@ async def test_human_gate_evidence_id_uniqueness(isolated_runtime, temporal_env)
         assert observed, "Human Gate #2 (NEEDS_HUMAN, attempt=2) was not observed"
         await handle.signal(
             FsasmMilestoneFourWorkflow.receive_human_decision,
-            HumanDecisionSignal(
-                task_id="TASK-001",
-                action=HumanDecisionAction.RETRY_ONCE,
+            full_decision_signal(
+                test_run_id,
+                "TASK-001",
+                2,
+                HumanDecisionAction.RETRY_ONCE,
                 reason="second retry reason",
             ),
         )
@@ -218,9 +223,11 @@ async def test_human_gate_evidence_id_uniqueness(isolated_runtime, temporal_env)
         assert observed, "Human Gate #3 (NEEDS_HUMAN, attempt=3) was not observed"
         await handle.signal(
             FsasmMilestoneFourWorkflow.receive_human_decision,
-            HumanDecisionSignal(
-                task_id="TASK-001",
-                action=HumanDecisionAction.ABORT,
+            full_decision_signal(
+                test_run_id,
+                "TASK-001",
+                3,
+                HumanDecisionAction.ABORT,
                 reason="abort after three attempts",
             ),
         )
