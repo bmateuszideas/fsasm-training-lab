@@ -368,11 +368,11 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Proponowane testy:** `tests/test_v1_executor_loop.py`.
 
-- [ ] Zrealizować model → Tool Broker → ToolObservation → model aż do jawnego terminalnego outcome.
-- [ ] W jednej `task_attempt` obsłużyć wiele `agent_step`, tool calls i model calls.
-- [ ] Egzekwować limity przed następnym skutkiem.
-- [ ] Normalizować `COMPLETED`, `NEEDS_INFORMATION`, `ESCALATION_REQUESTED`, `STEP_LIMIT_REACHED`, `TOOL_ERROR`, `POLICY_BLOCKED` lub zatwierdzone semantyczne odpowiedniki.
-- [ ] Final response jest prośbą o Verification, nie PASS.
+- [x] Zrealizować model → Tool Broker → ToolObservation → model aż do jawnego terminalnego outcome.
+- [x] W jednej `task_attempt` obsłużyć wiele `agent_step`, tool calls i model calls.
+- [x] Egzekwować limity przed następnym skutkiem.
+- [x] Normalizować `COMPLETED`, `NEEDS_INFORMATION`, `ESCALATION_REQUESTED`, `STEP_LIMIT_REACHED`, `TOOL_ERROR`, `POLICY_BLOCKED` lub zatwierdzone semantyczne odpowiedniki.
+- [x] Final response jest prośbą o Verification, nie PASS.
 
 **Odbiór:** scripted backend przechodzi co najmniej dwie iteracje rozdzielone realnym narzędziem; przekroczenie każdego limitu daje prawidłowy terminal reason bez niejawnej nowej próby.
 
