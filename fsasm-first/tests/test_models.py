@@ -245,9 +245,9 @@ class TestPlan:
         assert len(plan.tasks) == 3
         assert plan.goal == "Test goal"
 
-    def test_plan_exactly_3_tasks_required(self) -> None:
-        """Test that Plan must have exactly 3 tasks."""
-        tasks = [
+    def test_plan_min_one_task_required(self) -> None:
+        """T04: a v1 Plan accepts 1, 3 or N tasks; an empty task list is rejected."""
+        single = [
             ChildTask(
                 task_id="TASK-1",
                 sequence=1,
@@ -258,12 +258,20 @@ class TestPlan:
                 ),
             )
         ]
-        with pytest.raises(ValueError, match="exactly 3 ChildTasks"):
+        plan = Plan(
+            plan_id="plan-123",
+            run_id="run-123",
+            goal="Test",
+            tasks=single,
+        )
+        assert len(plan.tasks) == 1
+
+        with pytest.raises(ValueError, match="at least 1 ChildTask"):
             Plan(
-                plan_id="plan-123",
+                plan_id="plan-empty",
                 run_id="run-123",
                 goal="Test",
-                tasks=tasks,
+                tasks=[],
             )
 
     def test_plan_duplicate_task_ids_rejected(self) -> None:
