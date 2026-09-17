@@ -637,6 +637,59 @@ class EvidenceRecord(BaseModel):
         return v.strip()
 
 
+class ToolOperationKind(str, Enum):
+    """Kinds of tool operations the Tool Broker can perform (T11)."""
+
+    LIST_FILES = "list_files"
+    READ_FILE = "read_file"
+    SEARCH_CODE = "search_code"
+    APPLY_PATCH = "apply_patch"
+    INSPECT_CHANGES = "inspect_changes"
+
+
+class ToolObservation(BaseModel):
+    """Structured observation of one tool call (architecture §19, §22).
+
+    The Tool Broker produces this for every invocation. It never grants PASS:
+    it records the real effect (or the policy block) and an ``operation_id`` so
+    the result binds to a single attempt. The Verifier reads the actual
+    artifact; the Domain Core alone grants the transition.
+    """
+
+    operation_id: str = Field(
+        ..., description="Deterministic id for this operation within an attempt."
+    )
+    kind: ToolOperationKind = Field(
+        ..., description="The tool operation kind that produced this observation."
+    )
+    ok: bool = Field(
+        ..., description="Whether the operation produced a real effect (not a block)."
+    )
+    blocked: bool = Field(
+        default=False,
+        description="True when the operation was rejected by policy before any effect.",
+    )
+    reason: str = Field(
+        default="",
+        description="Why the operation was blocked or failed (empty on success).",
+    )
+    artifact_path: str | None = Field(
+        default=None,
+        description="Workspace-relative path of the affected artifact, if any.",
+    )
+    content: str = Field(
+        default="",
+        description="Observed content (read) or a normalized summary, if any.",
+    )
+    diff: str | None = Field(
+        default=None, description="Unified diff for write operations, if produced."
+    )
+    matches: list[str] = Field(
+        default_factory=list,
+        description="Workspace-relative paths (list/search) or matched lines, if any.",
+    )
+
+
 class PlannerOutput(BaseModel):
     """
     Complete planner output - proposal + assembled Plan + metadata.
