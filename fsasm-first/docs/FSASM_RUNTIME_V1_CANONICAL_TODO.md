@@ -510,11 +510,11 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Testy:** `tests/test_v1_trajectory_integrity.py`, `tests/test_v1_secret_redaction.py`.
 
-- [ ] Składać istniejące identyfikatory w trajektorię task → context → model call → tool call → observation → verification → evidence → state transition.
-- [ ] Rejestrować backend, liczniki, czas i tokeny/koszt tylko jeśli dostępne.
-- [ ] Audit/trajectory nie jest drugim źródłem PASS.
-- [ ] Redagować klucze, tokeny i oznaczone sekrety z promptów, observations, stdout/stderr i raportów.
-- [ ] Nie budować osobnej platformy monitoringu ani pipeline'u fine-tuningu.
+- [x] Składać istniejące identyfikatory w trajektorię task → context → model call → tool call → observation → verification → evidence → state transition.
+- [x] Rejestrować backend, liczniki, czas i tokeny/koszt tylko jeśli dostępne.
+- [x] Audit/trajectory nie jest drugim źródłem PASS.
+- [x] Redagować klucze, tokeny i oznaczone sekrety z promptów, observations, stdout/stderr i raportów.
+- [x] Nie budować osobnej platformy monitoringu ani pipeline'u fine-tuningu.
 
 **Odbiór:** trajektoria jest korelowalna i kompletna dla scenariusza E2E, a utrata pomocniczego logu nie zmienia zatwierdzonego stanu.
 
