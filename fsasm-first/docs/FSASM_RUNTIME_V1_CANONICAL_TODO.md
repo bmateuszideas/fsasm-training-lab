@@ -432,11 +432,11 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Proponowane:** `src/fsasm/router.py`, `tests/test_v1_model_router.py`.
 
-- [ ] Lokalny backend jest domyślny dla normalnego Child Task.
-- [ ] Consultation zwraca wskazówkę do kontekstu bieżącej próby bez zmiany właściciela wykonania.
-- [ ] Handover jawnie przypisuje task innemu adapterowi z tym samym lub węższym scope i własnym budżetem.
-- [ ] Ograniczyć liczbę eskalacji, koszt i dozwolone przejścia; zablokować ping-pong.
-- [ ] `ask_expert` nie może obchodzić scope ani dodawać prób.
+- [x] Lokalny backend jest domyślny dla normalnego Child Task.
+- [x] Consultation zwraca wskazówkę do kontekstu bieżącej próby bez zmiany właściciela wykonania.
+- [x] Handover jawnie przypisuje task innemu adapterowi z tym samym lub węższym scope i własnym budżetem.
+- [x] Ograniczyć liczbę eskalacji, koszt i dozwolone przejścia; zablokować ping-pong.
+- [x] `ask_expert` nie może obchodzić scope ani dodawać prób.
 
 **Odbiór:** testy rozróżniają consultation/handover, egzekwują limit i kończą wyczerpaną ścieżkę gate/stopem zgodnym z polityką.
 
