@@ -470,11 +470,11 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Proponowane:** `src/fsasm/recovery.py`, `tests/test_v1_recovery_reconcile.py`.
 
-- [ ] Zdefiniować checkpointy przed skutkiem, po skutku przed evidence, po evidence przed commit i po commit przed odpowiedzią activity.
-- [ ] Wiązać operację z `attempt`, `operation_id`, aktualnym artefaktem i evidence refs bez tworzenia drugiego autorytatywnego event store.
-- [ ] Przy resume najpierw inspekcja artefaktu i snapshotu, potem jawna decyzja verify/retry/stop.
-- [ ] Nie deklarować exactly-once zewnętrznych skutków.
-- [ ] Błąd transportowy nie jest automatycznie merytorycznym FAIL.
+- [x] Zdefiniować checkpointy przed skutkiem, po skutku przed evidence, po evidence przed commit i po commit przed odpowiedzią activity.
+- [x] Wiązać operację z `attempt`, `operation_id`, aktualnym artefaktem i evidence refs bez tworzenia drugiego autorytatywnego event store.
+- [x] Przy resume najpierw inspekcja artefaktu i snapshotu, potem jawna decyzja verify/retry/stop.
+- [x] Nie deklarować exactly-once zewnętrznych skutków.
+- [x] Błąd transportowy nie jest automatycznie merytorycznym FAIL.
 
 **Odbiór:** fault injection w każdym checkpointcie nie daje false PASS, nie powiela na ślepo patcha ani zgody i prowadzi do jednoznacznego bezpiecznego stanu.
 
