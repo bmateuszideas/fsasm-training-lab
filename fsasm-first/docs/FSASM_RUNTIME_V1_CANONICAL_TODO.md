@@ -456,11 +456,11 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Testy:** `tests/test_v1_domain_human_gate.py`, reprezentatywne worker tests.
 
-- [ ] Snapshot przechowuje gate occurrence, lifecycle, accepted/applied decision oraz zakres udzielonego uprawnienia.
-- [ ] Workflows dostarcza i oczekuje; Domain Core waliduje i stosuje RETRY_ONCE/ABORT.
-- [ ] Stara, obca, przyszła, niepełna, zduplikowana i sprzeczna decyzja nie wykonuje pracy.
-- [ ] Zastosowanie decyzji i zmiana limitu/statusu są jednym eventem snapshotu; dodatkowy audit pozostaje diagnostyczny.
-- [ ] Przenieść wartościowe testy M4, nie kopiować całego wewnętrznego mechanizmu słowników/kursorów.
+- [x] Snapshot przechowuje gate occurrence, lifecycle, accepted/applied decision oraz zakres udzielonego uprawnienia.
+- [x] Workflows dostarcza i oczekuje; Domain Core waliduje i stosuje RETRY_ONCE/ABORT.
+- [x] Stara, obca, przyszła, niepełna, zduplikowana i sprzeczna decyzja nie wykonuje pracy.
+- [x] Zastosowanie decyzji i zmiana limitu/statusu są jednym eventem snapshotu; dodatkowy audit pozostaje diagnostyczny.
+- [x] Przenieść wartościowe testy M4, nie kopiować całego wewnętrznego mechanizmu słowników/kursorów.
 
 **Odbiór:** dokładnie jedna poprawna RETRY_ONCE daje jedno uprawnienie; crash po commicie nie umożliwia ponownej aplikacji tej decyzji.
 
