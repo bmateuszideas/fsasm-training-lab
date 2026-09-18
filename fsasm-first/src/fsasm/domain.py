@@ -491,6 +491,16 @@ def _apply(state: RunState, event: DomainEvent) -> None:
         return
 
     if isinstance(event, HumanGateDecisionApplied):
+        # Human Gate is a durable snapshot semantics (T22): the gate occurrence,
+        # its lifecycle and the accepted/applied decision live in the
+        # authoritative snapshot, not in an ephemeral workflow-only consent.
+        # Identity (run/task/gate/decision) is validated BEFORE any effect; a
+        # stale, foreign, future, incomplete, duplicate or contradictory
+        # decision performs NO work. Foreign run_id is already rejected by the
+        # universal ``_validate_identity`` guard before this block. Applying the
+        # decision and changing the limit/status is ONE snapshot event; crash
+        # after the commit cannot re-apply the same decision (the task already
+        # left NEEDS_HUMAN).
         task = _find_task(state, event.task_id)
         if task.status != TaskStatus.NEEDS_HUMAN:
             raise InvalidTransitionError(
@@ -508,6 +518,48 @@ def _apply(state: RunState, event: DomainEvent) -> None:
                 entity_id=event.task_id,
                 reason=f"gate {event.gate_id!r} is not the open gate",
             )
+        # Stale gate: the decision targets a different attempt than the open
+        # gate (e.g. a late decision for an older attempt). It must NOT apply.
+        if event.attempt != state.gate.attempt:
+            raise InvalidTransitionError(
+                from_status=task.status.value,
+                to_status=task.status.value,
+                entity_type="ChildTask",
+                entity_id=event.task_id,
+                reason=(
+                    f"stale gate: decision attempt {event.attempt} does not "
+                    f"match open gate attempt {state.gate.attempt}"
+                ),
+            )
+        # Idempotency / duplicate / contradictory: a gate that already accepted
+        # a decision cannot accept another. The SAME decision_id replayed after
+        # a crash (post-commit) is a no-op rejection (the task already left
+        # NEEDS_HUMAN above in the common case; this guard also covers a gate
+        # still recorded as open with an accepted decision). A DIFFERENT
+        # decision_id is a contradictory submission and is rejected.
+        if state.gate.applied:
+            if state.gate.accepted_decision_id == event.decision_id:
+                raise InvalidTransitionError(
+                    from_status=task.status.value,
+                    to_status=task.status.value,
+                    entity_type="ChildTask",
+                    entity_id=event.task_id,
+                    reason=(
+                        f"duplicate decision {event.decision_id!r}: already "
+                        f"applied to gate {event.gate_id!r}"
+                    ),
+                )
+            raise InvalidTransitionError(
+                from_status=task.status.value,
+                to_status=task.status.value,
+                entity_type="ChildTask",
+                entity_id=event.task_id,
+                reason=(
+                    f"contradictory decision {event.decision_id!r}: gate "
+                    f"{event.gate_id!r} already accepted "
+                    f"{state.gate.accepted_decision_id!r}"
+                ),
+            )
         if event.action is HumanDecisionAction.RETRY_ONCE:
             if event.new_max_attempts is None:
                 raise InvalidTransitionError(
@@ -517,6 +569,13 @@ def _apply(state: RunState, event: DomainEvent) -> None:
                     entity_id=event.task_id,
                     reason="RETRY_ONCE requires new_max_attempts",
                 )
+            # Durably record the accepted/applied decision on the gate BEFORE
+            # the task effect, so the snapshot carries the lifecycle (the
+            # granted authority is exactly one additional attempt for this
+            # task/gate). This is the authority the commit persists.
+            state.gate.accepted_decision_id = event.decision_id
+            state.gate.accepted_action = event.action
+            state.gate.applied = True
             task.status = TaskStatus.READY
             task.max_attempts = event.new_max_attempts
             if event.task_id in state.needs_human_task_ids:
@@ -528,6 +587,9 @@ def _apply(state: RunState, event: DomainEvent) -> None:
                 # M4 apply_human_authorized_run_transition).
                 state.status = RunStatus.RUNNING
         elif event.action is HumanDecisionAction.ABORT:
+            state.gate.accepted_decision_id = event.decision_id
+            state.gate.accepted_action = event.action
+            state.gate.applied = True
             task.status = TaskStatus.FAILED
             if event.task_id not in state.failed_task_ids:
                 state.failed_task_ids.append(event.task_id)
