@@ -486,19 +486,19 @@ Jeżeli aktualne repo nie obsługuje wskazanej komendy, wykonawca nie pomija jej
 
 **Testy:** `tests/test_v1_product_entrypoints.py`.
 
-- [ ] Przed implementacją użytkownik zatwierdza zewnętrzny kontrakt CLI: argumenty, human/JSON output i exit codes. Rekomendacja: stabilny JSON dla automatyzacji oraz krótki human output jako osobny tryb.
-- [ ] `start_new` tworzy nowy run, `resume` obsługuje istniejący, `status` tylko odczytuje, `signal` wysyła kompletną decyzję bieżącej bramki.
-- [ ] Żadna komenda nie zgaduje gate, nie nadpisuje runu ani nie ujawnia sekretów.
-- [ ] Status rozróżnia domenowy stan od technicznego stanu usługi Workflows.
+- [x] Przed implementacją użytkownik zatwierdza zewnętrzny kontrakt CLI: argumenty, human/JSON output i exit codes. Rekomendacja: stabilny JSON dla automatyzacji oraz krótki human output jako osobny tryb.
+- [x] `start_new` tworzy nowy run, `resume` obsługuje istniejący, `status` tylko odczytuje, `signal` wysyła kompletną decyzję bieżącej bramki.
+- [x] Żadna komenda nie zgaduje gate, nie nadpisuje runu ani nie ujawnia sekretów.
+- [x] Status rozróżnia domenowy stan od technicznego stanu usługi Workflows.
 
 **Odbiór:** kontraktowe testy CLI pokrywają sukces, brak runu, kolizję ID, niespójny snapshot, brak otwartej bramki i błąd usługi.
 
 ### Gate G. Bounded autonomy i bezpieczne wznowienie
 
-- [ ] Human Gate jest częścią snapshotu, a nie ulotną zgodą workflow.
-- [ ] Resume rozstrzyga niepewny skutek przed ponowieniem.
-- [ ] Start/status/signal mają stabilne kontrakty produktu.
-- [ ] Zakres gwarancji nie zawiera fikcyjnego exactly-once.
+- [x] Human Gate jest częścią snapshotu, a nie ulotną zgodą workflow.
+- [x] Resume rozstrzyga niepewny skutek przed ponowieniem.
+- [x] Start/status/signal mają stabilne kontrakty produktu.
+- [x] Zakres gwarancji nie zawiera fikcyjnego exactly-once.
 
 ## Faza H. Integracja, obserwowalność, pakiet i odbiór przed laptopem
 
